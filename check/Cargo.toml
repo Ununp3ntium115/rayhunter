@@ -4,6 +4,7 @@ version = "0.13.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.98"
 rayhunter = { path = "../lib" }
 futures = { version = "0.3.30", default-features = false }
 chrono = { version = "0.4.31", features = ["serde"] }

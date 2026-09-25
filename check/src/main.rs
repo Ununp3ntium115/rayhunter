@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
 use clap::Parser;
 use log::{debug, error, info, warn};
@@ -135,13 +136,16 @@ async fn analyze_pcap(
     pcap_path: &str,
     show_skipped: bool,
     json_writer: Option<&mut IncrementalJsonWriter<File>>,
-) {
+) -> Result<()> {
     let mut harness =
         Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
-    let pcap_file = &mut File::open(&pcap_path).await.expect("failed to open file");
+    let pcap_file = &mut File::open(&pcap_path)
+        .await
+        .context("failed to open file")?;
+    // PcapNgReader expects pcapng format; legacy libpcap (.pcap) or truncated files fail here.
     let mut pcap_reader = PcapNgReader::new(pcap_file)
         .await
-        .expect("failed to read PCAP file");
+        .with_context(|| format!("failed to parse pcapng header in {pcap_path} — file may be legacy libpcap format (e.g. from QCSuper); try converting with editcap or tshark"))?;
     let mut report = Report::new(pcap_path);
     while let Some(Ok(block)) = pcap_reader.next_block().await {
         let row = match block {
@@ -158,27 +162,26 @@ async fn analyze_pcap(
         writer
             .write_report(&report)
             .await
-            .expect("failed to write report to JSON");
+            .context("failed to write report to JSON")?;
     }
+    Ok(())
 }
 
 async fn analyze_qmdl(
     qmdl_path: &str,
     show_skipped: bool,
     json_writer: Option<&mut IncrementalJsonWriter<File>>,
-) {
+) -> Result<()> {
     let mut harness =
         Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
-    let qmdl_file = &mut File::open(&qmdl_path).await.expect("failed to open file");
+    let qmdl_file = &mut File::open(&qmdl_path)
+        .await
+        .context("failed to open file")?;
     let mut qmdl_reader = QmdlMessageReader::new(qmdl_file)
         .await
-        .expect("failed to open QmdlReader");
+        .context("failed to open QmdlReader")?;
     let mut report = Report::new(qmdl_path);
-    while let Some(maybe_message) = qmdl_reader
-        .get_next_message()
-        .await
-        .expect("failed to get message")
-    {
+    while let Some(maybe_message) = qmdl_reader.get_next_message().await? {
         report.process_row(harness.analyze_qmdl_message(maybe_message));
     }
     report.print_summary(show_skipped);
@@ -186,8 +189,9 @@ async fn analyze_qmdl(
         writer
             .write_report(&report)
             .await
-            .expect("failed to write report to JSON");
+            .context("failed to write report to JSON")?;
     }
+    Ok(())
 }
 
 async fn pcapify(qmdl_path: &PathBuf) {
@@ -271,14 +275,18 @@ async fn main() {
         let path_str = path.to_str().unwrap();
         if name_str.ends_with(".qmdl") || name_str.ends_with(".qmdl.gz") {
             info!("**** Beginning analysis of {name_str}");
-            analyze_qmdl(path_str, args.show_skipped, json_writer.as_mut()).await;
+            if let Err(e) = analyze_qmdl(path_str, args.show_skipped, json_writer.as_mut()).await {
+                error!("{name_str}: {e:#}");
+            }
             if args.pcapify {
                 pcapify(&path.to_path_buf()).await;
             }
         } else if name_str.ends_with(".pcap") || name_str.ends_with(".pcapng") {
             // TODO: if we've already analyzed a QMDL, skip its corresponding pcap
             info!("**** Beginning analysis of {name_str}");
-            analyze_pcap(path_str, args.show_skipped, json_writer.as_mut()).await;
+            if let Err(e) = analyze_pcap(path_str, args.show_skipped, json_writer.as_mut()).await {
+                error!("{name_str}: {e:#}");
+            }
         }
     }
 

@@ -4646,6 +4646,7 @@ dependencies = [
 name = "rayhunter-check"
 version = "0.13.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "clap",
  "futures",
