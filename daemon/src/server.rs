@@ -471,6 +471,98 @@ pub async fn get_zip(
 
 #[cfg_attr(feature = "apidocs", utoipa::path(
     get,
+    path = "/api/zip",
+    tag = "Recordings",
+    responses(
+        (status = StatusCode::OK, description = "ZIP download successful. Contains all non-empty recordings.", content_type = "application/zip"),
+    ),
+    summary = "Download all recordings as a ZIP file",
+    description = "Stream a ZIP file containing every non-empty recording: QMDL, NDJSON analysis report, GPS data (if present), and a PCAPNG."
+))]
+pub async fn get_zip_all(
+    State(state): State<Arc<ServerState>>,
+) -> Result<Response, (StatusCode, String)> {
+    let entry_indices: Vec<(usize, String)> = {
+        let qmdl_store = state.qmdl_store_lock.read().await;
+        qmdl_store
+            .manifest
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.qmdl_size_bytes > 0)
+            .map(|(i, e)| (i, e.name.clone()))
+            .collect()
+    };
+
+    let (reader, writer) = duplex(8192);
+
+    tokio::spawn(async move {
+        let result: Result<(), Error> = async {
+            let mut zip = ZipFileWriter::with_tokio(writer);
+
+            for (entry_index, name) in entry_indices {
+                for &file_kind in FileKind::ALL {
+                    let file_opt = {
+                        let qmdl_store = state.qmdl_store_lock.read().await;
+                        qmdl_store.open_file(entry_index, file_kind).await?
+                    };
+                    let Some(mut file) = file_opt else { continue };
+
+                    let zip_entry = ZipEntryBuilder::new(
+                        file_kind.get_filename(&name, false).into(),
+                        Compression::Stored,
+                    );
+                    let mut entry_writer = zip.write_entry_stream(zip_entry).await?.compat_write();
+
+                    if file_kind == FileKind::Qmdl {
+                        let reader = QmdlMessageReader::new(&mut file).await?;
+                        let stream = reader.into_qmdl_stream();
+                        let mut reader = pin!(stream.into_async_read().compat());
+                        copy(&mut reader, &mut entry_writer).await?;
+                    } else {
+                        copy(&mut file, &mut entry_writer).await?;
+                    }
+                    entry_writer.into_inner().close().await?;
+                }
+
+                // Add PCAP
+                let gps_records = load_gps_records_for_entry(&state, entry_index).await;
+                let pcap_entry =
+                    ZipEntryBuilder::new(format!("{name}.pcapng").into(), Compression::Stored);
+                let mut entry_writer = zip.write_entry_stream(pcap_entry).await?.compat_write();
+                let qmdl_file = {
+                    let qmdl_store = state.qmdl_store_lock.read().await;
+                    qmdl_store
+                        .open_file(entry_index, FileKind::Qmdl)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("QMDL file not found for {name}"))?
+                };
+                let qmdl_reader = QmdlMessageReader::new(qmdl_file).await?;
+                if let Err(e) =
+                    generate_pcap_data(&mut entry_writer, qmdl_reader, gps_records).await
+                {
+                    error!("Failed to generate PCAP for {name}: {e:?}");
+                }
+                entry_writer.into_inner().close().await?;
+            }
+
+            zip.close().await?;
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = result {
+            error!("Error generating all-recordings ZIP: {e:?}");
+        }
+    });
+
+    let headers = [(CONTENT_TYPE, "application/zip")];
+    let body = Body::from_stream(ReaderStream::new(reader));
+    Ok((headers, body).into_response())
+}
+
+#[cfg_attr(feature = "apidocs", utoipa::path(
+    get,
     path = "/api/wifi-status",
     tag = "Configuration",
     responses(
