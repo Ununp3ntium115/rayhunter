@@ -66,6 +66,14 @@ The Orbic, Moxee, UZ801, and TMOHS1 can connect to a nearby WiFi network while s
 
 Check that the **DNS Servers** field in the config has valid entries (the default is `9.9.9.9` and `149.112.112.112`). If your home network and the device hotspot use the same subnet (for example, both are on `192.168.1.x`), try restarting the daemon by saving the config again from the web UI.
 
+### How does Rayhunter handle dependency security?
+
+Rayhunter is a Rust project. All dependency versions — including transitive ones — are pinned in `Cargo.lock`, which is checked into the repository. This means every build produces exactly the same set of crate versions; new versions are never pulled in silently.
+
+To scan for known vulnerabilities in the current dependency tree, run [`cargo audit`](https://crates.io/crates/cargo-audit) (install with `cargo install cargo-audit`). New dependencies are reviewed by project maintainers before they are merged.
+
+If you discover a security issue in Rayhunter itself or one of its dependencies, please report it to the EFF at the contact details in [Support and feedback](./support-feedback-community.md).
+
 ### How do I disable the WiFi hotspot on the Orbic RC400L?
 
 To disable both WiFi bands, [first obtain a shell](./orbic.md#shell), then:
