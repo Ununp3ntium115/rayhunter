@@ -124,7 +124,7 @@ impl DiagDevice {
                         return Err(e);
                     }
 
-                    info!(
+                    debug!(
                         "Diag device initialization failed {num_retries} times, retrying in {delay:?}: {e}"
                     );
                     sleep(delay).await;
