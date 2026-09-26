@@ -13,7 +13,10 @@ use rayhunter::{
     qmdl::QmdlMessageReader,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 use tokio::fs::File;
 use walkdir::WalkDir;
 
@@ -112,6 +115,23 @@ impl Report {
 mod tests {
     use super::*;
     use chrono::DateTime;
+    use std::path::Path;
+
+    #[test]
+    fn qmdl_base_path_strips_qmdl_extension() {
+        assert_eq!(
+            qmdl_base_path(Path::new("/data/recording.qmdl")),
+            PathBuf::from("/data/recording")
+        );
+    }
+
+    #[test]
+    fn qmdl_base_path_strips_qmdl_gz_extension() {
+        assert_eq!(
+            qmdl_base_path(Path::new("/data/recording.qmdl.gz")),
+            PathBuf::from("/data/recording")
+        );
+    }
 
     #[test]
     fn process_row_records_skip_reason_and_event() {
@@ -272,6 +292,16 @@ async fn pcapify(qmdl_path: &PathBuf) {
     info!("wrote pcap to {:?}", pcap_path);
 }
 
+/// Returns the path with .qmdl (and .gz) stripped, used to match a QMDL against its pcap export.
+fn qmdl_base_path(path: &Path) -> PathBuf {
+    let without_last = path.with_extension("");
+    if without_last.extension().is_some_and(|e| e == "qmdl") {
+        without_last.with_extension("") // recording.qmdl.gz → recording
+    } else {
+        without_last // recording.qmdl → recording
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -311,11 +341,21 @@ async fn main() {
         );
     }
 
-    for maybe_entry in WalkDir::new(&args.path) {
-        let Ok(entry) = maybe_entry else {
-            error!("failed to open dir entry {maybe_entry:?}");
-            continue;
-        };
+    // Collect first so QMDLs and their exported pcaps can be deduped regardless of walk order.
+    let entries: Vec<_> = WalkDir::new(&args.path)
+        .into_iter()
+        .filter_map(|e| match e {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                error!("failed to open dir entry: {err}");
+                None
+            }
+        })
+        .collect();
+
+    // Pass 1: QMDLs — track each stem so their pcap exports can be skipped.
+    let mut analyzed_qmdl_stems: HashSet<PathBuf> = HashSet::new();
+    for entry in &entries {
         let name = entry.file_name();
         let name_str = name.to_str().unwrap();
         let path = entry.path();
@@ -325,16 +365,35 @@ async fn main() {
             if let Err(e) = analyze_qmdl(path_str, args.show_skipped, json_writer.as_mut()).await {
                 error!("{path_str}: {e}");
             }
+            analyzed_qmdl_stems.insert(qmdl_base_path(path));
             if args.pcapify {
                 pcapify(&path.to_path_buf()).await;
             }
-        } else if name_str.ends_with(".pcapng") {
-            // TODO: if we've already analyzed a QMDL, skip its corresponding pcap
+        }
+    }
+
+    // Pass 2: pcap files — skip those whose QMDL was already analyzed above.
+    for entry in &entries {
+        let name = entry.file_name();
+        let name_str = name.to_str().unwrap();
+        let path = entry.path();
+        let path_str = path.to_str().unwrap();
+        if name_str.ends_with(".pcapng") {
+            let stem = path.with_extension("");
+            if analyzed_qmdl_stems.contains(&stem) {
+                info!("**** Skipping {name_str} (QMDL already analyzed)");
+                continue;
+            }
             info!("**** Beginning analysis of {name_str}");
             if let Err(e) = analyze_pcap(path_str, args.show_skipped, json_writer.as_mut()).await {
                 error!("{path_str}: {e}");
             }
         } else if name_str.ends_with(".pcap") {
+            let stem = path.with_extension("");
+            if analyzed_qmdl_stems.contains(&stem) {
+                info!("**** Skipping {name_str} (QMDL already analyzed)");
+                continue;
+            }
             info!("**** Beginning analysis of {name_str}");
             if let Err(e) =
                 analyze_classic_pcap(path_str, args.show_skipped, json_writer.as_mut()).await
