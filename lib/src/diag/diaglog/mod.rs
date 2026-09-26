@@ -2,6 +2,11 @@
 
 use chrono::{DateTime, FixedOffset};
 use deku::prelude::*;
+use std::sync::LazyLock;
+
+/// GPS epoch (1980-01-06 00:00:00 UTC). Parsed once; reused per packet.
+pub(crate) static GPS_EPOCH: LazyLock<DateTime<FixedOffset>> =
+    LazyLock::new(|| DateTime::parse_from_rfc3339("1980-01-06T00:00:00-00:00").unwrap());
 
 pub mod ll1;
 pub mod mac;
@@ -121,7 +126,7 @@ impl Timestamp {
         // Lower 16 bits: time since last 1/800s tick in 1/32 chip units
         let ts_upper = self.ts >> 16;
         let ts_lower = self.ts & 0xffff;
-        let epoch = chrono::DateTime::parse_from_rfc3339("1980-01-06T00:00:00-00:00").unwrap();
+        let epoch = *GPS_EPOCH;
         let mut delta_seconds = ts_upper as f64 * 1.25;
         delta_seconds += ts_lower as f64 / 40960.0;
         let ts_delta = chrono::Duration::milliseconds(delta_seconds as i64);

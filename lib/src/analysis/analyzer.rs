@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::DeviceMetadata;
+use crate::diag::diaglog::GPS_EPOCH;
 use crate::diag::{DiagParsingError, Message, MessagesContainer};
 use crate::gsmtap::{GsmtapHeader, GsmtapMessage, GsmtapType, parser as gsmtap_parser};
 use crate::util::RuntimeMetadata;
@@ -441,8 +442,7 @@ impl Harness {
     pub fn analyze_pcap_packet(&mut self, packet: EnhancedPacketBlock) -> AnalysisRow {
         self.packet_num += 1;
 
-        let epoch = DateTime::parse_from_rfc3339("1980-01-06T00:00:00-00:00").unwrap();
-        let packet_timestamp = epoch + packet.timestamp;
+        let packet_timestamp = *GPS_EPOCH + packet.timestamp;
         let mut row = AnalysisRow {
             packet_timestamp: Some(packet_timestamp),
             skipped_message_reason: None,
@@ -590,7 +590,7 @@ impl Harness {
     }
 
     fn assert_events_match_analyzers(&self, events: &[Option<Event>]) {
-        assert_eq!(events.len(), self.analyzers.len());
+        debug_assert_eq!(events.len(), self.analyzers.len());
     }
 
     pub fn get_metadata(&self) -> ReportMetadata {

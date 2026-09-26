@@ -266,9 +266,10 @@ async fn main() {
             continue;
         };
         let name = entry.file_name();
-        let name_str = name.to_str().unwrap();
+        let name_str = name.to_string_lossy();
         let path = entry.path();
-        let path_str = path.to_str().unwrap();
+        let path_str = path.to_string_lossy();
+        let path_str = path_str.as_ref();
         if name_str.ends_with(".qmdl") || name_str.ends_with(".qmdl.gz") {
             info!("**** Beginning analysis of {name_str}");
             analyze_qmdl(path_str, args.show_skipped, json_writer.as_mut()).await;
