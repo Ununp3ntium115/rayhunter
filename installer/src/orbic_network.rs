@@ -9,7 +9,7 @@ use tokio::time::sleep;
 
 use crate::RAYHUNTER_DAEMON_INIT;
 use crate::connection::{
-    TelnetConnection, install_config, install_wifi_tools, setup_data_directory,
+    TelnetConnection, check_free_space, install_config, install_wifi_tools, setup_data_directory,
 };
 use crate::orbic_auth::{LoginInfo, LoginRequest, LoginResponse, encode_password};
 use crate::output::{eprintln, print, println};
@@ -229,6 +229,10 @@ async fn setup_rayhunter(admin_ip: &str, reset_config: bool, data_dir: &str) -> 
     .await?;
 
     let mut conn = TelnetConnection::new(addr, false);
+
+    let needed_kb = rayhunter_daemon_bin.len() as u64 / 1024 + 5 * 1024;
+    check_free_space(&mut conn, data_dir, needed_kb).await?;
+
     setup_data_directory(&mut conn, data_dir).await?;
 
     // Ensure bin and scripts directories exist under the data dir (via symlink)

@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio::time::sleep;
 
 use crate::RAYHUNTER_DAEMON_INIT;
-use crate::connection::{DeviceConnection, install_config, install_wifi_tools};
+use crate::connection::{DeviceConnection, check_free_space, install_config, install_wifi_tools};
 use crate::output::{print, println};
 use crate::util::open_usb_device;
 
@@ -152,6 +152,14 @@ async fn setup_rootshell(adb_device: &mut ADBUSBDevice) -> Result<()> {
 
 async fn setup_rayhunter(mut adb_device: ADBUSBDevice, reset_config: bool) -> Result<ADBUSBDevice> {
     let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
+
+    {
+        let mut conn = AdbConnection {
+            device: &mut adb_device,
+        };
+        let needed_kb = rayhunter_daemon_bin.len() as u64 / 1024 + 5 * 1024;
+        check_free_space(&mut conn, "/data", needed_kb).await?;
+    }
 
     adb_at_syscmd(
         &mut adb_device,

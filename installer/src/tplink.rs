@@ -18,7 +18,7 @@ use serde::Deserialize;
 use tokio::time::sleep;
 
 use crate::InstallTpLink;
-use crate::connection::{TelnetConnection, install_config, setup_data_directory};
+use crate::connection::{TelnetConnection, check_free_space, install_config, setup_data_directory};
 use crate::output::println;
 use crate::util::{interactive_shell, telnet_send_command, telnet_send_file};
 
@@ -184,11 +184,14 @@ async fn tplink_run_install(
     };
 
     let mut conn = TelnetConnection::new(addr, true);
+
+    let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
+    let needed_kb = rayhunter_daemon_bin.len() as u64 / 1024 + 5 * 1024;
+    check_free_space(&mut conn, &data_dir, needed_kb).await?;
+
     setup_data_directory(&mut conn, &data_dir).await?;
 
     install_config(&mut conn, "tplink", reset_config).await?;
-
-    let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
 
     telnet_send_file(
         addr,

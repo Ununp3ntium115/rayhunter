@@ -15,6 +15,50 @@ pub trait DeviceConnection {
     -> impl Future<Output = Result<()>> + Send;
 }
 
+/// Fails if the filesystem containing `path` has fewer than `needed_kb` kilobytes free.
+/// Silently succeeds when `df` output cannot be parsed; the subsequent push will report its
+/// own error if the device really is out of space.
+pub async fn check_free_space<C: DeviceConnection>(
+    conn: &mut C,
+    path: &str,
+    needed_kb: u64,
+) -> Result<()> {
+    // `tail -n 1` handles BusyBox `df` wrapping long filesystem names to a second line.
+    let output = conn
+        .run_command(&format!("df -k '{path}' 2>/dev/null | tail -n 1"))
+        .await?;
+    let Some(available_kb) = parse_df_available_kb(&output) else {
+        // df output is unparseable on this firmware; proceed and let the push fail on its own.
+        return Ok(());
+    };
+    if available_kb < needed_kb {
+        bail!(
+            "Not enough free space on the filesystem containing '{path}'.\n\
+             Need at least {} MB but only {} MB available.\n\
+             \n\
+             To free space, delete old recordings on the device:\n  \
+               rm -rf /data/rayhunter/qmdl/*",
+            needed_kb / 1024,
+            available_kb / 1024,
+        );
+    }
+    Ok(())
+}
+
+/// Parse the "Available" column (4th field, 0-indexed col 3) from a POSIX `df -k` data line.
+fn parse_df_available_kb(output: &str) -> Option<u64> {
+    // POSIX df -k columns: Filesystem  1K-blocks  Used  Available  Use%  Mountpoint
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 4
+            && let Ok(kb) = parts[3].parse::<u64>()
+        {
+            return Some(kb);
+        }
+    }
+    None
+}
+
 /// Check if a file exists using a DeviceConnection
 pub async fn file_exists<C: DeviceConnection>(conn: &mut C, path: &str) -> bool {
     conn.run_command(&format!("test -f '{path}' && echo exists || echo missing"))
@@ -231,5 +275,31 @@ impl DeviceConnection for TelnetConnection {
 
     async fn write_file(&mut self, path: &str, content: &[u8]) -> Result<()> {
         crate::util::telnet_send_file(self.addr, path, content, self.wait_for_prompt).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_df_posix_output() {
+        let output = "/dev/block/xxx  512000  400000  112000  78% /data";
+        assert_eq!(parse_df_available_kb(output), Some(112000));
+    }
+
+    #[test]
+    fn parse_df_busybox_wrapped_filesystem_name() {
+        // BusyBox df wraps long names; tail -n 1 gives us only the numbers line.
+        let output = "112000";
+        // With just one token this won't parse (need 4 fields), but tail -n1 gives the data row.
+        let output2 = "/dev/ubi0_0      204800   98304   106496  48% /data";
+        assert_eq!(parse_df_available_kb(output2), Some(106496));
+    }
+
+    #[test]
+    fn parse_df_returns_none_for_garbage() {
+        assert_eq!(parse_df_available_kb("no numbers here"), None);
+        assert_eq!(parse_df_available_kb(""), None);
     }
 }
