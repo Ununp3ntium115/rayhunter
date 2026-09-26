@@ -136,22 +136,65 @@ async fn analyze_pcap(
     show_skipped: bool,
     json_writer: Option<&mut IncrementalJsonWriter<File>>,
 ) {
+    // Sniff magic bytes to detect classic libpcap format before attempting pcapng parse.
+    // Classic pcap (µs and ns variants) is not supported; direct the user to convert.
+    {
+        use std::io::Read;
+        match std::fs::File::open(pcap_path).and_then(|mut f| {
+            let mut magic = [0u8; 4];
+            f.read_exact(&mut magic)?;
+            Ok(magic)
+        }) {
+            Ok(magic) => {
+                const CLASSIC_PCAP_MAGICS: [[u8; 4]; 4] = [
+                    [0xA1, 0xB2, 0xC3, 0xD4], // µs big-endian
+                    [0xD4, 0xC3, 0xB2, 0xA1], // µs little-endian
+                    [0xA1, 0xB2, 0x3C, 0x4D], // ns big-endian
+                    [0x4D, 0x3C, 0xB2, 0xA1], // ns little-endian
+                ];
+                if CLASSIC_PCAP_MAGICS.contains(&magic) {
+                    error!(
+                        "{pcap_path}: classic .pcap format is not supported by rayhunter-check; \
+                         convert to pcapng with: editcap -F pcapng {pcap_path} out.pcapng"
+                    );
+                    return;
+                }
+            }
+            Err(e) => {
+                error!("{pcap_path}: failed to read file magic bytes: {e}");
+                return;
+            }
+        }
+    }
+
     let mut harness =
         Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
     let pcap_file = &mut File::open(&pcap_path).await.expect("failed to open file");
-    let mut pcap_reader = PcapNgReader::new(pcap_file)
-        .await
-        .expect("failed to read PCAP file");
+    let mut pcap_reader = match PcapNgReader::new(pcap_file).await {
+        Ok(reader) => reader,
+        Err(e) => {
+            error!("{pcap_path}: failed to parse pcapng section header (not a pcapng file?): {e}");
+            return;
+        }
+    };
     let mut report = Report::new(pcap_path);
-    while let Some(Ok(block)) = pcap_reader.next_block().await {
-        let row = match block {
-            Block::EnhancedPacket(packet) => harness.analyze_pcap_packet(packet),
-            other => {
-                debug!("{pcap_path}: skipping pcap packet {other:?}");
-                continue;
+    while let Some(block_result) = pcap_reader.next_block().await {
+        match block_result {
+            Ok(block) => {
+                let row = match block {
+                    Block::EnhancedPacket(packet) => harness.analyze_pcap_packet(packet),
+                    other => {
+                        debug!("{pcap_path}: skipping pcap packet {other:?}");
+                        continue;
+                    }
+                };
+                report.process_row(row);
             }
-        };
-        report.process_row(row);
+            Err(e) => {
+                warn!("{pcap_path}: PCAP read error (truncated file?): {e}");
+                break;
+            }
+        }
     }
     report.print_summary(show_skipped);
     if let Some(writer) = json_writer {
