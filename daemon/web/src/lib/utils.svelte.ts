@@ -74,6 +74,7 @@ export interface Config {
     gps_mode: GpsMode;
     gps_fixed_latitude: number | null;
     gps_fixed_longitude: number | null;
+    keep_screen_on: boolean;
 }
 
 export interface WifiStatus {

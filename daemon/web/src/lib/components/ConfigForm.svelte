@@ -203,6 +203,13 @@
                         label="Colorblind Mode"
                         bind:checked={config.colorblind_mode}
                     />
+                    {#if config.device === 'orbic'}
+                        <CheckboxField
+                            id="keep_screen_on"
+                            label="Keep Screen On (Orbic only)"
+                            bind:checked={config.keep_screen_on}
+                        />
+                    {/if}
                 </div>
 
                 <FormField
