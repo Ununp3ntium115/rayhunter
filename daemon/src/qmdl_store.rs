@@ -125,6 +125,10 @@ pub struct ManifestEntry {
     pub gps_mode: Option<GpsMode>,
     #[serde(default)]
     pub compressed: bool,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 impl ManifestEntry {
@@ -143,6 +147,8 @@ impl ManifestEntry {
             upload_time: None,
             gps_mode: Some(gps_mode),
             compressed: true,
+            display_name: None,
+            notes: None,
         }
     }
 
@@ -272,6 +278,8 @@ impl RecordingStore {
                 stop_reason: None,
                 upload_time: None,
                 gps_mode: None,
+                display_name: None,
+                notes: None,
             });
         }
 
@@ -465,6 +473,23 @@ impl RecordingStore {
             self.write_manifest().await?;
         }
         Ok(())
+    }
+
+    pub async fn set_entry_label(
+        &mut self,
+        name: &str,
+        display_name: Option<String>,
+        notes: Option<String>,
+    ) -> Result<(), RecordingStoreError> {
+        let entry = self
+            .manifest
+            .entries
+            .iter_mut()
+            .find(|e| e.name == name)
+            .ok_or(RecordingStoreError::NoSuchEntryError)?;
+        entry.display_name = display_name;
+        entry.notes = notes;
+        self.write_manifest().await
     }
 
     pub async fn mark_entry_as_uploaded(

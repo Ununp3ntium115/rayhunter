@@ -29,8 +29,8 @@ use crate::pcap::get_pcap;
 use crate::qmdl_store::RecordingStore;
 use crate::server::{
     ServerState, debug_set_display_state, get_analyzers, get_config, get_qmdl, get_time,
-    get_wifi_status, get_zip, scan_wifi, serve_static, set_config, set_time_offset,
-    test_notification,
+    get_wifi_status, get_zip, scan_wifi, serve_static, set_config, set_recording_label,
+    set_time_offset, test_notification,
 };
 use crate::stats::{get_qmdl_manifest, get_system_stats, get_update_status};
 use crate::update::{UpdateStatus, run_update_check_worker};
@@ -42,7 +42,7 @@ use analysis::{
 };
 use axum::Router;
 use axum::response::Redirect;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use diag::{
     DiagDeviceCtrlMessage, delete_all_recordings, delete_recording, get_analysis_report,
     start_recording, stop_recording,
@@ -85,6 +85,7 @@ fn get_router() -> AppRouter {
         .route("/api/wifi-scan", post(scan_wifi))
         .route("/api/time", get(get_time))
         .route("/api/time-offset", post(set_time_offset))
+        .route("/api/recording/{name}/label", patch(set_recording_label))
         .route("/api/debug/display-state", post(debug_set_display_state))
         .route("/api/gps", get(get_gps))
         .route("/api/gps", post(post_gps))

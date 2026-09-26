@@ -299,6 +299,12 @@ pub struct SetTimeOffsetRequest {
     pub offset_seconds: i64,
 }
 
+#[derive(Deserialize)]
+pub struct SetLabelRequest {
+    pub display_name: Option<String>,
+    pub notes: Option<String>,
+}
+
 #[cfg_attr(feature = "apidocs", utoipa::path(
     get,
     path = "/api/time",
@@ -360,7 +366,7 @@ pub async fn get_zip(
     Path(entry_name): Path<String>,
 ) -> Result<Response, (StatusCode, String)> {
     let qmdl_idx = entry_name.trim_end_matches(".zip").to_owned();
-    let entry_index = {
+    let (entry_index, display_name) = {
         let qmdl_store = state.qmdl_store_lock.read().await;
         let (entry_index, entry) = qmdl_store.entry_for_name(&qmdl_idx).ok_or((
             StatusCode::NOT_FOUND,
@@ -374,9 +380,13 @@ pub async fn get_zip(
             ));
         }
 
-        entry_index
+        (entry_index, entry.display_name.clone())
     };
 
+    let zip_filename = display_name
+        .as_deref()
+        .unwrap_or(&qmdl_idx)
+        .to_string();
     let qmdl_store_lock = state.qmdl_store_lock.clone();
     let gps_records = load_gps_records_for_entry(&state, entry_index).await;
 
@@ -464,9 +474,15 @@ pub async fn get_zip(
         }
     });
 
-    let headers = [(CONTENT_TYPE, "application/zip")];
-    let body = Body::from_stream(ReaderStream::new(reader));
-    Ok((headers, body).into_response())
+    let response = Response::builder()
+        .header(CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{zip_filename}.zip\""),
+        )
+        .body(Body::from_stream(ReaderStream::new(reader)))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(response)
 }
 
 #[cfg_attr(feature = "apidocs", utoipa::path(
@@ -554,6 +570,39 @@ pub async fn debug_set_display_state(
             "display system not available".to_string(),
         ))
     }
+}
+
+pub async fn set_recording_label(
+    State(state): State<Arc<ServerState>>,
+    Path(entry_name): Path<String>,
+    Json(req): Json<SetLabelRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if let Some(ref dn) = req.display_name
+        && (dn.len() > 64
+            || !dn
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ' '))
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "display_name must be ≤64 chars and contain only alphanumeric, _, -, or space"
+                .to_string(),
+        ));
+    }
+    if let Some(ref notes) = req.notes
+        && notes.len() > 500
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "notes must be ≤500 characters".to_string(),
+        ));
+    }
+    let mut qmdl_store = state.qmdl_store_lock.write().await;
+    qmdl_store
+        .set_entry_label(&entry_name, req.display_name, req.notes)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
