@@ -95,3 +95,13 @@ This heuristic is experimental. It may produce a false positive if the device re
 *(disabled by default)*
 
 This analyzer is great for testing if your Rayhunter installation works. It will alert every time a new tower is seen (specifically every time a tower broadcasts a SIB1 message.) It is designed to be very noisy so we do not recommend leaving it on but if this alerts it means your Rayhunter device is working! 
+
+### Timing Advance Outlier
+
+Monitors the LTE Timing Advance (TA) value from baseband diagnostic logs (log code 0xb114). TA is the round-trip propagation delay between the device and the serving cell, expressed in units of 16 Ts (≈78 m one-way per index). A legitimate tower 1 km away has TA ≈ 13; a tower 10 km away has TA ≈ 128.
+
+IMSI catchers are often physically close to the target (same room or street), which produces an unusually small TA. Conversely, a spoofed cell identity at an impossible distance produces an unusually large TA.
+
+This heuristic tracks a running mean and standard deviation using Welford's online algorithm. After a 20-sample warmup period, a TA more than 2.5σ from the session mean triggers a Medium severity event.
+
+**Known limitations (v1):** The distribution is global across all cells. A legitimate handover to a nearby small cell will produce a true TA drop that could trigger a false positive. Per-cell partitioning (keyed by PCI or EARFCN) is planned for a future version.

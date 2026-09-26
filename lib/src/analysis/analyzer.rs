@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::DeviceMetadata;
+use crate::diag::diaglog::LogBody;
 use crate::diag::{DiagParsingError, Message, MessagesContainer};
 use crate::gsmtap::{GsmtapHeader, GsmtapMessage, GsmtapType, parser as gsmtap_parser};
 use crate::util::RuntimeMetadata;
@@ -16,7 +17,7 @@ use super::{
     incomplete_sib::IncompleteSibAnalyzer, information_element::InformationElement,
     nas_null_cipher::NasNullCipherAnalyzer, no_nas_messages::NoNasMessagesAnalyzer,
     null_cipher::NullCipherAnalyzer, priority_2g_downgrade::LteSib6And7DowngradeAnalyzer,
-    test_analyzer::TestAnalyzer,
+    test_analyzer::TestAnalyzer, timing_advance::TimingAdvanceAnalyzer,
 };
 
 fn boxed(analyzer: impl Analyzer + Send + 'static) -> Box<dyn Analyzer + Send> {
@@ -56,6 +57,10 @@ fn all_analyzers(
             boxed(NoNasMessagesAnalyzer::new()),
         ),
         (DiagnosticAnalyzer::metadata(), boxed(DiagnosticAnalyzer {})),
+        (
+            TimingAdvanceAnalyzer::metadata(),
+            boxed(TimingAdvanceAnalyzer::new()),
+        ),
     ]
     .into_iter()
 }
@@ -506,6 +511,22 @@ impl Harness {
         };
         row.packet_timestamp = packet_timestamp;
 
+        // Intercept LL1 timing messages before gsmtap_parser consumes the message.
+        // These are not converted to GSMTAP and would otherwise be silently dropped.
+        if let Message::Log {
+            timestamp,
+            body: LogBody::LteLl1ServingCellTiming { data },
+            ..
+        } = &qmdl_message
+        {
+            let timestamp = timestamp.to_datetime();
+            row.packet_timestamp = Some(timestamp);
+            let element = InformationElement::from_ll1_timing(data.starting_ul_timing_advance);
+            row.events = self.analyze_information_element(&element, timestamp);
+            self.assert_events_match_analyzers(&row.events);
+            return row;
+        }
+
         let (timestamp, gsmtap_msg) = match gsmtap_parser::parse(qmdl_message) {
             Ok(Some((timestamp, msg))) => (timestamp.to_datetime(), msg),
             Ok(None) => {
@@ -746,5 +767,48 @@ mod tests {
         )));
         let event = row.events[0].as_ref().expect("expected a warning event");
         assert!(event.message.ends_with(" (packet 3)"));
+    }
+
+    #[test]
+    fn test_ll1_timing_advance_intercept_fires_outlier_event() {
+        use crate::analysis::timing_advance::TimingAdvanceAnalyzer;
+        use crate::diag::diaglog::ll1;
+
+        let mut harness = Harness::new();
+        harness.add_analyzer(
+            TimingAdvanceAnalyzer::metadata(),
+            Box::new(TimingAdvanceAnalyzer::new()),
+        );
+
+        let stable_data = ll1::ServingCellTiming {
+            version: 0,
+            num_records: 0,
+            starting_sub_fn: 0,
+            starting_system_fn: 0,
+            starting_dl_frame_timing_offs: 0,
+            starting_ul_frame_timing_offs: 0,
+            starting_ul_timing_advance: 10,
+            timing_adjustment: vec![],
+        };
+        for i in 0..40u64 {
+            harness.analyze_qmdl_message(Ok(log_message(
+                i << 16,
+                LogBody::LteLl1ServingCellTiming {
+                    data: stable_data.clone(),
+                },
+            )));
+        }
+
+        let outlier_data = ll1::ServingCellTiming {
+            starting_ul_timing_advance: 200,
+            ..stable_data
+        };
+        let row = harness.analyze_qmdl_message(Ok(log_message(
+            41 << 16,
+            LogBody::LteLl1ServingCellTiming { data: outlier_data },
+        )));
+        let event = row.events[0].as_ref().expect("expected outlier event");
+        assert_eq!(event.event_type, EventType::Medium);
+        assert!(event.message.ends_with(" (packet 41)"));
     }
 }

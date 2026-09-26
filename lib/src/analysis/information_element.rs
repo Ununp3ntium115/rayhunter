@@ -48,6 +48,12 @@ pub enum LteInformationElement {
     SbcchSlBchV2x(lte_rrc::SBCCH_SL_BCH_Message_V2X_r14),
 
     NAS(NASMessage),
+
+    /// Uplink timing advance from LL1 serving-cell timing log (0xb114).
+    /// `ta` is in units of 16 Ts (≈78 m one-way per index).
+    LteLl1ServingCellTiming {
+        ta: u16,
+    },
     // FIXME: unclear which message these "NB" types map to
     //DlCcchNb(),
     //DlDcchNb(),
@@ -58,6 +64,14 @@ pub enum LteInformationElement {
     //BcchDlSchNb(),
     //PcchNb(),
     //ScMcchNb(),
+}
+
+impl InformationElement {
+    pub fn from_ll1_timing(ta: u16) -> Self {
+        InformationElement::LTE(Box::new(LteInformationElement::LteLl1ServingCellTiming {
+            ta,
+        }))
+    }
 }
 
 impl TryFrom<&GsmtapMessage> for InformationElement {
