@@ -8,6 +8,9 @@
         children,
     }: { shown: boolean; title: string; children: Snippet } = $props();
 
+    const id = $props.id();
+    const titleId = `${id}-title`;
+
     onMount(() => {
         const handler = () => {
             document.documentElement.style.setProperty('--scroll-y', `${window.scrollY}px`);
@@ -34,11 +37,14 @@
 
 {#if shown}
     <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         class="fixed left-5 right-5 top-5 bottom-5 z-50 bg-white border border-white rounded-md
 		flex flex-col p-2 drop-shadow-sm"
     >
         <div class="flex justify-between items-center p-1">
-            <span class="text-2xl">{title}</span>
+            <span id={titleId} class="text-2xl">{title}</span>
             <button onclick={() => (shown = false)} aria-label="close">
                 <svg
                     xmlns="http://www.w3.org/2000/svg"

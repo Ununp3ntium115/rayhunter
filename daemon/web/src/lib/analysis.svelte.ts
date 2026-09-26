@@ -1,6 +1,19 @@
 import { parse_ndjson, type NewlineDeliminatedJson } from './ndjson';
 import { req } from './utils.svelte';
 
+// Raw JSON shapes received from the daemon's NDJSON analysis report format.
+type RawReportMetadata = {
+    analyzers: AnalyzerMetadata[];
+    rayhunter?: RayhunterMetadata;
+    report_version?: number;
+};
+type RawEvent = { event_type: string; message: string };
+type RawAnalysisRow = {
+    skipped_message_reason?: string;
+    events?: (RawEvent | null)[];
+    packet_timestamp: string;
+};
+
 export type AnalysisReport = {
     metadata: ReportMetadata;
     rows: AnalysisRow[];
@@ -18,10 +31,13 @@ export class ReportMetadata {
     public rayhunter: RayhunterMetadata;
     public report_version: number;
 
-    constructor(ndjson: any) {
-        this.analyzers = ndjson.analyzers;
-        this.rayhunter = ndjson.rayhunter;
-        this.report_version = ndjson.report_version || 2; // Default to v2
+    constructor(ndjson: unknown) {
+        // SAFETY: ndjson is report_json[0] from the daemon's NDJSON report — always the metadata line.
+        const raw = ndjson as RawReportMetadata;
+        this.analyzers = raw.analyzers;
+        // SAFETY: rayhunter field is always present in daemon NDJSON output.
+        this.rayhunter = raw.rayhunter as RayhunterMetadata;
+        this.report_version = raw.report_version ?? 2;
     }
 }
 
@@ -61,24 +77,33 @@ export type Event = {
     message: string;
 } | null;
 
-function get_event(event_json: any): Event {
-    if (!['Informational', 'Low', 'Medium', 'High'].includes(event_json.event_type)) {
-        throw `Invalid/unhandled event type: ${event_json.event_type}`;
-    }
-
-    return event_json;
+function is_event_type(s: string): s is EventType {
+    return (['Informational', 'Low', 'Medium', 'High'] as const).some((t) => t === s);
 }
 
-function get_rows(row_jsons: any[]): AnalysisRow[] {
+function get_event(event_json: unknown): Event {
+    // SAFETY: event_json is a non-null element of a daemon NDJSON events array; null is filtered before this call.
+    const raw = event_json as RawEvent;
+    const event_type = raw.event_type;
+    if (!is_event_type(event_type)) {
+        throw `Invalid/unhandled event type: ${event_type}`;
+    }
+
+    return { event_type, message: raw.message };
+}
+
+function get_rows(row_jsons: unknown[]): AnalysisRow[] {
     const rows: AnalysisRow[] = [];
     for (const row_json of row_jsons) {
-        if (row_json.skipped_message_reason) {
+        // SAFETY: row_jsons elements are objects from the daemon's NDJSON analysis rows.
+        const row = row_json as RawAnalysisRow;
+        if (row.skipped_message_reason) {
             rows.push({
                 type: AnalysisRowType.Skipped,
-                reason: row_json.skipped_message_reason,
+                reason: row.skipped_message_reason,
             });
         }
-        const events: Event[] = (row_json.events ?? []).map((event_json: any): Event | null => {
+        const events: Event[] = (row.events ?? []).map((event_json): Event | null => {
             if (event_json === null) {
                 return null;
             } else {
@@ -88,7 +113,7 @@ function get_rows(row_jsons: any[]): AnalysisRow[] {
         if (events.some((event) => event !== null)) {
             rows.push({
                 type: AnalysisRowType.Analysis,
-                packet_timestamp: new Date(row_json.packet_timestamp),
+                packet_timestamp: new Date(row.packet_timestamp),
                 events,
             });
         }
