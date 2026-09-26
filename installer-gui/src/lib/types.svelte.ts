@@ -11,6 +11,7 @@ export interface InstallerSubcommand {
     arguments: InstallerArgument[];
     command: string;
     label: string;
+    show_device_network_setup: boolean;
 }
 
 export interface InstallerArgument {

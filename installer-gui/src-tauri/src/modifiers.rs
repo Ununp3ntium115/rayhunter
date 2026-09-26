@@ -29,6 +29,9 @@ pub struct SubcommandModifier<'a> {
     /// Modifications to the arguments of this subcommand. The order arguments are defined in this
     /// vector will match the order the arguments are displayed in the GUI.
     pub arg_modifiers: Vec<ArgumentModifier<'a>>,
+    /// Whether to show a connection setup screen before arg selection.
+    /// True for network-based installers (WiFi/USB-tethering); false for USB/ADB-based ones.
+    pub show_device_network_setup: bool,
 }
 
 /// Provides "modifiers" or additional metadata about each subcommand.
@@ -75,11 +78,13 @@ pub fn subcommand_modifiers() -> Vec<SubcommandModifier<'static>> {
             command: "orbic",
             gui_label: "Orbic/Kajeet (via network)",
             arg_modifiers: orbic_and_moxee_args.clone(),
+            show_device_network_setup: true,
         },
         SubcommandModifier {
             command: "orbic-usb",
             gui_label: "Orbic/Kajeet (via legacy USB+ADB installer)",
             arg_modifiers: vec![reset_config],
+            show_device_network_setup: false,
         },
         SubcommandModifier {
             command: "tplink",
@@ -99,31 +104,37 @@ pub fn subcommand_modifiers() -> Vec<SubcommandModifier<'static>> {
                     advanced: true,
                 },
             ],
+            show_device_network_setup: true,
         },
         SubcommandModifier {
             command: "moxee",
             gui_label: "Moxee",
             arg_modifiers: orbic_and_moxee_args,
+            show_device_network_setup: true,
         },
         SubcommandModifier {
             command: "pinephone",
             gui_label: "PinePhone",
             arg_modifiers: vec![],
+            show_device_network_setup: false,
         },
         SubcommandModifier {
             command: "tmobile",
             gui_label: "TMobile",
             arg_modifiers: vec![admin_password, admin_ip],
+            show_device_network_setup: true,
         },
         SubcommandModifier {
             command: "uz801",
             gui_label: "UZ801",
             arg_modifiers: vec![admin_ip],
+            show_device_network_setup: false,
         },
         SubcommandModifier {
             command: "wingtech",
             gui_label: "Wingtech",
             arg_modifiers: vec![admin_password, admin_ip],
+            show_device_network_setup: true,
         },
     ]
 }

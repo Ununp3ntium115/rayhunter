@@ -55,6 +55,7 @@ struct Subcommand<'a> {
     arguments: Vec<Argument<'a>>,
     command: &'a str,
     label: &'a str,
+    show_device_network_setup: bool,
 }
 
 fn argument_help(argument: &clap::Arg) -> String {
@@ -139,6 +140,7 @@ impl Subcommand<'_> {
                 .collect(),
             command: modifier.command,
             label: modifier.gui_label,
+            show_device_network_setup: modifier.show_device_network_setup,
         }
     }
 }

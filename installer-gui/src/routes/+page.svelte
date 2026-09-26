@@ -1,12 +1,13 @@
 <script lang="ts">
     import ArgMenu from '$lib/ArgMenu.svelte';
+    import DeviceConnect from '$lib/DeviceConnect.svelte';
     import DeviceSelect from '$lib/DeviceSelect.svelte';
     import InstallProgress from '$lib/InstallProgress.svelte';
     import { ArgMenuInputData } from '$lib/types.svelte';
     import type { InstallerSubcommand } from '$lib/types.svelte';
     import type { PageProps } from './$types';
 
-    type GUIScreen = 'DeviceSelection' | 'ArgSelection' | 'Installation';
+    type GUIScreen = 'DeviceSelection' | 'DeviceConnect' | 'ArgSelection' | 'Installation';
 
     let { data }: PageProps = $props();
     let argMenuData = $state(new ArgMenuInputData());
@@ -23,6 +24,14 @@
             argMenuData = new ArgMenuInputData();
         }
         selectedDevice = device;
+        if (device.show_device_network_setup) {
+            currentScreen = 'DeviceConnect';
+        } else {
+            currentScreen = 'ArgSelection';
+        }
+    }
+
+    function go_to_args() {
         currentScreen = 'ArgSelection';
     }
 
@@ -108,6 +117,8 @@
 </div>
 {#if currentScreen === 'DeviceSelection' || selectedDevice === null}
     <DeviceSelect initialSelection={selectedDevice} {set_device} subcommands={data.subcommands} />
+{:else if currentScreen === 'DeviceConnect'}
+    <DeviceConnect subcommand={selectedDevice} go_back={reselect_device} continue_to_args={go_to_args} />
 {:else if currentScreen === 'ArgSelection'}
     <ArgMenu
         bind:inputData={argMenuData}
