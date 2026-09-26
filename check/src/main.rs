@@ -70,8 +70,7 @@ impl Report {
             *self.skipped_reasons.entry(reason).or_insert(0) += 1;
             self.skipped += 1;
         }
-        for maybe_event in row.events {
-            let Some(event) = maybe_event else { continue };
+        for event in row.events {
             let Some(timestamp) = row.packet_timestamp else {
                 continue;
             };
@@ -118,10 +117,11 @@ mod tests {
                 DateTime::parse_from_rfc3339("2025-01-01T00:00:00+00:00").unwrap(),
             ),
             skipped_message_reason: Some("parse error".to_string()),
-            events: vec![Some(Event {
+            events: vec![Event {
                 event_type: EventType::Low,
                 message: "warning".to_string(),
-            })],
+                analyzer_index: 0,
+            }],
         });
 
         assert_eq!(report.skipped, 1);

@@ -78,6 +78,7 @@ impl Analyzer for NoNasMessagesAnalyzer {
         Some(Event {
             event_type: EventType::Low,
             message: "No NAS messages seen in 5 minutes, SIM possibly not working".to_string(),
+            analyzer_index: 0,
         })
     }
 }
