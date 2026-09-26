@@ -27,7 +27,7 @@
             </tr>
         </thead>
         <tbody>
-            {#each entries as entry, i}
+            {#each entries as entry, i (entry.name)}
                 <TableRow {entry} current={false} {i} {manager} />
             {/each}
         </tbody>
@@ -35,7 +35,7 @@
 {:else}
     <!--For smaller screens we use cards-->
     <div class="flex flex-col gap-4">
-        {#each entries as entry}
+        {#each entries as entry (entry.name)}
             <Card {entry} current={false} {server_is_recording} {manager} />
         {/each}
     </div>
