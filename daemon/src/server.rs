@@ -471,6 +471,138 @@ pub async fn get_zip(
 
 #[cfg_attr(feature = "apidocs", utoipa::path(
     get,
+    path = "/api/all.zip",
+    tag = "Recordings",
+    responses(
+        (status = StatusCode::OK, description = "ZIP download successful", content_type = "application/zip"),
+    ),
+    summary = "Download all recordings as a ZIP",
+    description = "Stream a ZIP containing every non-empty recording, each in its own subdirectory named after the recording ID."
+))]
+pub async fn get_all_zip(State(state): State<Arc<ServerState>>) -> Response {
+    // Snapshot names of non-empty entries; indices are re-resolved inside the
+    // spawn to stay safe against concurrent deletes shifting the index space.
+    let entry_names: Vec<String> = {
+        let qmdl_store = state.qmdl_store_lock.read().await;
+        qmdl_store
+            .manifest
+            .entries
+            .iter()
+            .filter(|e| e.qmdl_size_bytes > 0)
+            .map(|e| e.name.clone())
+            .collect()
+    };
+
+    let (reader, writer) = duplex(8192);
+
+    tokio::spawn(async move {
+        let result: Result<(), Error> = async {
+            let mut zip = ZipFileWriter::with_tokio(writer);
+
+            for entry_name in entry_names {
+                // Re-resolve index each iteration so a concurrent delete can't
+                // cause a panic or wrong-file access.
+                let entry_index = {
+                    let qmdl_store = state.qmdl_store_lock.read().await;
+                    match qmdl_store.entry_for_name(&entry_name) {
+                        Some((idx, _)) => idx,
+                        None => {
+                            warn!(
+                                "entry {entry_name} disappeared during all.zip streaming, skipping"
+                            );
+                            continue;
+                        }
+                    }
+                };
+
+                // Add stored files (QMDL, analysis NDJSON, GPS NDJSON)
+                for &file_kind in FileKind::ALL {
+                    let file_opt = {
+                        let qmdl_store = state.qmdl_store_lock.read().await;
+                        qmdl_store.open_file(entry_index, file_kind).await?
+                    };
+
+                    let Some(mut file) = file_opt else {
+                        continue;
+                    };
+
+                    let zip_path = format!(
+                        "{entry_name}/{}",
+                        file_kind.get_filename(&entry_name, false)
+                    );
+                    let zip_entry = ZipEntryBuilder::new(zip_path.into(), Compression::Stored);
+                    let mut entry_writer = zip.write_entry_stream(zip_entry).await?.compat_write();
+
+                    if file_kind == FileKind::Qmdl {
+                        let reader = QmdlMessageReader::new(&mut file).await?;
+                        let stream = reader.into_qmdl_stream();
+                        let mut reader = pin!(stream.into_async_read().compat());
+                        copy(&mut reader, &mut entry_writer).await?;
+                    } else {
+                        copy(&mut file, &mut entry_writer).await?;
+                    }
+                    entry_writer.into_inner().close().await?;
+                }
+
+                // Add PCAP: open the QMDL reader before starting the ZIP entry
+                // so a failure never leaves an unclosed entry in the archive.
+                let gps_records = load_gps_records_for_entry(&state, entry_index).await;
+                let pcap_reader_result: Result<_, Error> = async {
+                    let qmdl_file = {
+                        let qmdl_store = state.qmdl_store_lock.read().await;
+                        qmdl_store
+                            .open_file(entry_index, FileKind::Qmdl)
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("QMDL file not found"))?
+                    };
+                    QmdlMessageReader::new(qmdl_file).await.map_err(Into::into)
+                }
+                .await;
+
+                match pcap_reader_result {
+                    Ok(qmdl_reader) => {
+                        let pcap_entry = ZipEntryBuilder::new(
+                            format!("{entry_name}/{entry_name}.pcapng").into(),
+                            Compression::Stored,
+                        );
+                        let mut pcap_writer =
+                            zip.write_entry_stream(pcap_entry).await?.compat_write();
+                        if let Err(e) =
+                            generate_pcap_data(&mut pcap_writer, qmdl_reader, gps_records).await
+                        {
+                            error!("Failed to generate PCAP for entry {entry_name}: {e:?}");
+                        }
+                        pcap_writer.into_inner().close().await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to open QMDL for PCAP for entry {entry_name}: {e:?}");
+                    }
+                }
+            }
+
+            zip.close().await?;
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = result {
+            error!("Error generating all.zip: {e:?}");
+        }
+    });
+
+    let headers = [
+        (CONTENT_TYPE, "application/zip"),
+        (
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"rayhunter-recordings.zip\"",
+        ),
+    ];
+    let body = Body::from_stream(ReaderStream::new(reader));
+    (headers, body).into_response()
+}
+
+#[cfg_attr(feature = "apidocs", utoipa::path(
+    get,
     path = "/api/wifi-status",
     tag = "Configuration",
     responses(

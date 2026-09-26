@@ -4,6 +4,7 @@
     import { screenIsLgUp } from '$lib/stores/breakpoint';
     import TableRow from './ManifestTableRow.svelte';
     import Card from './ManifestCard.svelte';
+    import DownloadLink from './DownloadLink.svelte';
     interface Props {
         entries: ManifestEntry[];
         server_is_recording: boolean;
@@ -11,6 +12,10 @@
     }
     let { entries, server_is_recording, manager }: Props = $props();
 </script>
+
+<div class="mb-4">
+    <DownloadLink url="/api/all.zip" text="Download All Recordings" full_button={true} />
+</div>
 
 <!--For larger screens we use a table-->
 {#if $screenIsLgUp}
