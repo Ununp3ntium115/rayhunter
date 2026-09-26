@@ -263,9 +263,24 @@ async fn install_file_impl(
     if file_info.file_size == 0 {
         bail!("File transfer unsuccessful\nFile is empty");
     }
+    let expected_size = payload.len() as u32;
+    if file_info.file_size != expected_size {
+        // Size mismatch most often means /data was full: `mv` from /tmp
+        // silently left the old file in place on BusyBox when /data had no room.
+        bail!(
+            "File transfer unsuccessful\n\
+             Size mismatch at {dest}: expected {expected_size}B, found {}B\n\
+             Hint: the device's /data partition may be full. Free up space and re-run the installer.",
+            file_info.file_size
+        );
+    }
     let output = adb_command(adb_device, &["sha256sum", dest])?;
     if !output.contains(&file_hash) {
-        bail!("File transfer unsuccessful\nBad hash expected {file_hash} got {output}");
+        bail!(
+            "File transfer unsuccessful\n\
+             Bad hash at {dest}: expected {file_hash}, got {output}\n\
+             Hint: if the hashes differ consistently, the device filesystem may be corrupted or full."
+        );
     }
     Ok(())
 }
