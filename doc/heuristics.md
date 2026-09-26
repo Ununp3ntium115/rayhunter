@@ -94,4 +94,6 @@ This heuristic is experimental. It may produce a false positive if the device re
 
 *(disabled by default)*
 
-This analyzer is great for testing if your Rayhunter installation works. It will alert every time a new tower is seen (specifically every time a tower broadcasts a SIB1 message.) It is designed to be very noisy so we do not recommend leaving it on but if this alerts it means your Rayhunter device is working! 
+This analyzer is great for testing if your Rayhunter installation works. It will alert every time a new tower is seen (specifically every time a tower broadcasts a SIB1 message.) It is designed to be very noisy so we do not recommend leaving it on but if this alerts it means your Rayhunter device is working!
+
+**Note:** SIB1 messages are broadcast by towers to all nearby devices regardless of whether a SIM card is present. Alerts from this analyzer do not require a SIM and do not indicate any cellular connection — only that your device is receiving radio signals from towers in range.
