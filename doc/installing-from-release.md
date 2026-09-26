@@ -20,9 +20,15 @@ Make sure you've got one of Rayhunter's [supported devices](./supported-devices.
     cd ~/Downloads/rayhunter-vX.X.X-PLATFORM
     ```
 
-   On Windows you can decompress using the file browser, then navigate to the
-   folder that contains `installer.exe`, **hold Shift**, Right-Click inside the
-   folder, then click "Open in PowerShell".
+   On Windows you can decompress using the file browser. To open a terminal in
+   the folder, **hold Shift** and Right-Click inside it, then click
+   **"Open in PowerShell"** or **"Open in Terminal"**. If neither option
+   appears (common on Windows 11 Pro), open PowerShell from the Start menu and
+   navigate manually:
+
+   ```powershell
+   cd "$HOME\Downloads\rayhunter-vX.X.X-PLATFORM"
+   ```
 
 4. **Connect to your device.**
 
