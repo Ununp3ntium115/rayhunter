@@ -164,3 +164,52 @@ impl Analyzer for DiagnosticAnalyzer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gsmtap::{GsmtapHeader, GsmtapMessage, GsmtapType, LteNasSubtype};
+
+    fn ts() -> chrono::DateTime<chrono::FixedOffset> {
+        chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00+00:00").unwrap()
+    }
+
+    fn nas_ie(payload: &[u8]) -> InformationElement {
+        InformationElement::try_from(&GsmtapMessage {
+            header: GsmtapHeader::new(GsmtapType::LteNas(LteNasSubtype::Plain)),
+            payload: payload.to_vec(),
+        })
+        .expect("failed to parse test NAS payload")
+    }
+
+    #[test]
+    fn test_non_lte_returns_none() {
+        let mut a = DiagnosticAnalyzer::new();
+        let t = ts();
+        assert!(a.analyze_information_element(&InformationElement::GSM, 0, t).is_none());
+        assert!(a.analyze_information_element(&InformationElement::UMTS, 0, t).is_none());
+        assert!(a.analyze_information_element(&InformationElement::FiveG, 0, t).is_none());
+    }
+
+    #[test]
+    fn test_identity_request_fires() {
+        // 0x07 = plain EPS MM, 0x55 = Identity Request, 0x01 = IMSI
+        let mut a = DiagnosticAnalyzer::new();
+        let event = a
+            .analyze_information_element(&nas_ie(&[0x07, 0x55, 0x01]), 0, ts())
+            .expect("identity request should trigger DiagnosticAnalyzer");
+        assert_eq!(event.event_type, EventType::Informational);
+        assert!(event.message.contains("Identity Request"));
+    }
+
+    #[test]
+    fn test_attach_reject_illegal_ue_fires() {
+        // 0x07 = plain EPS MM, 0x44 = Attach Reject, 0x03 = Illegal UE
+        let mut a = DiagnosticAnalyzer::new();
+        let event = a
+            .analyze_information_element(&nas_ie(&[0x07, 0x44, 0x03]), 0, ts())
+            .expect("attach reject with Illegal UE should trigger DiagnosticAnalyzer");
+        assert_eq!(event.event_type, EventType::Informational);
+        assert!(event.message.contains("Attach Reject"));
+    }
+}
