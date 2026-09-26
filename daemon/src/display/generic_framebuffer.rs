@@ -182,7 +182,11 @@ pub fn update_ui(
     }
 
     let colorblind_mode = config.colorblind_mode;
-    let mut display_style = display_style_from_state(DisplayState::Recording, colorblind_mode);
+    // Start as Paused (white) so the display shows "not running" until the
+    // diag thread confirms recording has actually started. Without this,
+    // a failed DiagDevice init (e.g. modem offline in charging-only mode)
+    // leaves the screen green permanently.
+    let mut display_style = display_style_from_state(DisplayState::Paused, colorblind_mode);
 
     task_tracker.spawn(async move {
         // this feels wrong, is there a more rusty way to do this?
