@@ -25,3 +25,5 @@
   - [PinePhone and PinePhone Pro](./pinephone.md)
   - [Moxee Hotspot](./moxee.md)
 - [REST API Documentation](./api-docs.md)
+- [Contributing]()
+  - [Adding a heuristic](./adding-a-heuristic.md)
