@@ -186,6 +186,11 @@ impl Config {
                 Some("/data/misc/wifi/hostapd.conf".into()),
                 Some("/data/misc/wifi/sockets".into()),
             ),
+            Device::Orbic | Device::Moxee => (
+                Some("/data/rayhunter/bin/wpa_supplicant".into()),
+                Some("/etc/hostapd.conf".into()),
+                None,
+            ),
             _ => (None, None, None),
         };
         wifi_station::WifiConfig {
@@ -200,8 +205,20 @@ impl Config {
             udhcpc_hook_path: Some("/data/rayhunter/udhcpc-hook.sh".into()),
             dhcp_lease_path: Some("/data/rayhunter/dhcp_lease".into()),
             wpa_conf_path: Some("/data/rayhunter/wpa_sta.conf".into()),
-            iw_bin: resolve_bin("iw"),
-            udhcpc_bin: resolve_bin("udhcpc"),
+            iw_bin: resolve_bin("iw").or_else(|| {
+                if self.device == Device::Orbic || self.device == Device::Moxee {
+                    Some("/data/rayhunter/bin/iw".into())
+                } else {
+                    None
+                }
+            }),
+            udhcpc_bin: resolve_bin("udhcpc").or_else(|| {
+                if self.device == Device::Orbic || self.device == Device::Moxee {
+                    Some("/data/rayhunter/bin/udhcpc".into())
+                } else {
+                    None
+                }
+            }),
             crash_log_dir: Some("/data/rayhunter/crash-logs".into()),
             wakelock_name: Some("rayhunter".into()),
         }
@@ -253,5 +270,58 @@ pub fn parse_args() -> Args {
     }
     Args {
         config_path: args[1].clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_orbic_wifi_config_has_binary_paths() {
+        let config = Config {
+            device: Device::Orbic,
+            ..Default::default()
+        };
+        let wifi_config = config.wifi_config();
+        assert_eq!(
+            wifi_config.wpa_supplicant_bin,
+            Some("/data/rayhunter/bin/wpa_supplicant".to_string()),
+            "Orbic should use bundled wpa_supplicant from /data/rayhunter/bin/"
+        );
+        assert_eq!(
+            wifi_config.iw_bin,
+            Some("/data/rayhunter/bin/iw".to_string()),
+            "Orbic should use bundled iw from /data/rayhunter/bin/"
+        );
+        assert_eq!(
+            wifi_config.udhcpc_bin,
+            Some("/data/rayhunter/bin/udhcpc".to_string()),
+            "Orbic should use bundled udhcpc from /data/rayhunter/bin/"
+        );
+        assert_eq!(
+            wifi_config.hostapd_conf,
+            Some("/etc/hostapd.conf".to_string()),
+            "Orbic should use system hostapd.conf"
+        );
+    }
+
+    #[test]
+    fn test_moxee_wifi_config_has_binary_paths() {
+        let config = Config {
+            device: Device::Moxee,
+            ..Default::default()
+        };
+        let wifi_config = config.wifi_config();
+        assert_eq!(
+            wifi_config.wpa_supplicant_bin,
+            Some("/data/rayhunter/bin/wpa_supplicant".to_string()),
+            "Moxee should use bundled wpa_supplicant from /data/rayhunter/bin/"
+        );
+        assert_eq!(
+            wifi_config.iw_bin,
+            Some("/data/rayhunter/bin/iw".to_string()),
+            "Moxee should use bundled iw from /data/rayhunter/bin/"
+        );
     }
 }
