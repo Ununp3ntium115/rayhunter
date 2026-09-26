@@ -9,7 +9,6 @@ mod gps;
 mod http_client;
 mod key_input;
 mod notifications;
-mod orbic_keep_screen;
 mod pcap;
 mod qmdl_store;
 mod server;
@@ -266,11 +265,6 @@ async fn run_with_config(
             diag_tx.clone(),
             shutdown_token.clone(),
         );
-
-        if config.keep_screen_on && config.device == Device::Orbic {
-            info!("Starting keep-screen-on watchdog");
-            orbic_keep_screen::run_keep_screen_on_task(&task_tracker, shutdown_token.clone());
-        }
 
         if config.auto_check_updates {
             run_update_check_worker(
