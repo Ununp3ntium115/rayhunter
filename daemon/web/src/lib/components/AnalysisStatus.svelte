@@ -23,7 +23,15 @@
             } else if (typeof entry.analysis_report === 'string') {
                 return entry.analysis_report;
             } else {
-                return `${entry.analysis_report.statistics.num_warnings} warnings`;
+                const stats = entry.analysis_report.statistics;
+                if (stats.num_warnings === 0) {
+                    return '0 warnings';
+                }
+                const parts: string[] = [];
+                if (stats.num_high > 0) parts.push(`${stats.num_high}H`);
+                if (stats.num_medium > 0) parts.push(`${stats.num_medium}M`);
+                if (stats.num_low > 0) parts.push(`${stats.num_low}L`);
+                return parts.join(' ');
             }
         } else {
             return 'Loading...';

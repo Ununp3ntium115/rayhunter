@@ -77,6 +77,9 @@ describe('analysis report parsing', () => {
             throw 'wrong row type';
         }
         expect(report.statistics.num_warnings).toEqual(2);
+        expect(report.statistics.num_low).toEqual(2);
+        expect(report.statistics.num_medium).toEqual(0);
+        expect(report.statistics.num_high).toEqual(0);
         expect(report.statistics.num_skipped_packets).toEqual(1);
     });
 });

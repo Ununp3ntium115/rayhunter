@@ -9,6 +9,9 @@ export type AnalysisReport = {
 
 export type ReportStatistics = {
     num_warnings: number;
+    num_low: number;
+    num_medium: number;
+    num_high: number;
     num_informational_logs: number;
     num_skipped_packets: number;
 };
@@ -98,6 +101,9 @@ function get_rows(row_jsons: any[]): AnalysisRow[] {
 
 function get_report_stats(rows: AnalysisRow[]): ReportStatistics {
     let num_warnings = 0;
+    let num_low = 0;
+    let num_medium = 0;
+    let num_high = 0;
     let num_informational_logs = 0;
     let num_skipped_packets = 0;
     for (const row of rows) {
@@ -110,6 +116,13 @@ function get_report_stats(rows: AnalysisRow[]): ReportStatistics {
                         num_informational_logs++;
                     } else {
                         num_warnings++;
+                        if (event.event_type === 'Low') {
+                            num_low++;
+                        } else if (event.event_type === 'Medium') {
+                            num_medium++;
+                        } else if (event.event_type === 'High') {
+                            num_high++;
+                        }
                     }
                 }
             }
@@ -117,6 +130,9 @@ function get_report_stats(rows: AnalysisRow[]): ReportStatistics {
     }
     return {
         num_warnings,
+        num_low,
+        num_medium,
+        num_high,
         num_informational_logs,
         num_skipped_packets,
     };
