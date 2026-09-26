@@ -36,6 +36,8 @@
     let scanResults = $state<WifiNetwork[]>([]);
     let dnsServersInput = $state('');
     let gpsMode = $derived(config?.gps_mode);
+    let geoLoading = $state(false);
+    let geoError = $state<string | null>(null);
 
     async function load_config() {
         try {
@@ -56,6 +58,38 @@
         } finally {
             loading = false;
         }
+    }
+
+    function fill_from_browser_location() {
+        geoError = null;
+        if (!navigator.geolocation) {
+            geoError = 'Geolocation is not available in this browser or context (requires HTTPS).';
+            return;
+        }
+        geoLoading = true;
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                if (config !== null) {
+                    config.gps_fixed_latitude = pos.coords.latitude;
+                    config.gps_fixed_longitude = pos.coords.longitude;
+                }
+                geoLoading = false;
+            },
+            (err) => {
+                if (err.code === err.PERMISSION_DENIED) {
+                    geoError =
+                        'Location permission was denied. Please allow location access in your browser.';
+                } else if (err.code === err.POSITION_UNAVAILABLE) {
+                    geoError = 'Location is currently unavailable. Try again later.';
+                } else if (err.code === err.TIMEOUT) {
+                    geoError = 'Location request timed out. Try again.';
+                } else {
+                    geoError = `Geolocation error: ${err.message}`;
+                }
+                geoLoading = false;
+            },
+            { timeout: 10000 }
+        );
     }
 
     async function save_config() {
@@ -612,6 +646,9 @@
                         <select
                             id="gps_mode"
                             bind:value={config.gps_mode}
+                            onchange={() => {
+                                geoError = null;
+                            }}
                             class="form-control w-full"
                         >
                             <option value={GpsMode.Disabled}>Disabled</option>
@@ -620,6 +657,26 @@
                         </select>
                     </FormField>
                     {#if config.gps_mode === GpsMode.Fixed}
+                        <div class="flex flex-col gap-1">
+                            <button
+                                type="button"
+                                onclick={fill_from_browser_location}
+                                disabled={geoLoading}
+                                class="self-start bg-rayhunter-blue hover:bg-rayhunter-dark-blue disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-md flex flex-row gap-1 items-center"
+                            >
+                                {#if geoLoading}
+                                    <div
+                                        class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
+                                    ></div>
+                                    Getting location...
+                                {:else}
+                                    📍 Fill from browser location
+                                {/if}
+                            </button>
+                            {#if geoError}
+                                <p class="text-sm text-red-600">{geoError}</p>
+                            {/if}
+                        </div>
                         <FormField
                             id="gps_fixed_latitude"
                             label="Fixed Latitude"
