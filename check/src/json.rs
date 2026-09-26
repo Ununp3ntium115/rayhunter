@@ -80,6 +80,7 @@ mod test {
             event: Event {
                 event_type: EventType::High,
                 message: "hi".into(),
+                analyzer_index: 0,
             },
             timestamp: chrono::DateTime::default(),
         });

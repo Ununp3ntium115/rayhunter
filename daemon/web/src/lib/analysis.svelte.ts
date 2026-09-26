@@ -59,14 +59,14 @@ export type EventType = 'Informational' | 'Low' | 'Medium' | 'High';
 export type Event = {
     event_type: EventType;
     message: string;
-} | null;
+    analyzer_index: number;
+};
 
-function get_event(event_json: any): Event {
-    if (!['Informational', 'Low', 'Medium', 'High'].includes(event_json.event_type)) {
-        throw `Invalid/unhandled event type: ${event_json.event_type}`;
+function parse_event_type(raw: string): EventType {
+    if (!['Informational', 'Low', 'Medium', 'High'].includes(raw)) {
+        throw `Invalid/unhandled event type: ${raw}`;
     }
-
-    return event_json;
+    return raw as EventType;
 }
 
 function get_rows(row_jsons: any[]): AnalysisRow[] {
@@ -78,14 +78,29 @@ function get_rows(row_jsons: any[]): AnalysisRow[] {
                 reason: row_json.skipped_message_reason,
             });
         }
-        const events: Event[] = (row_json.events ?? []).map((event_json: any): Event | null => {
-            if (event_json === null) {
-                return null;
-            } else {
-                return get_event(event_json);
-            }
-        });
-        if (events.some((event) => event !== null)) {
+        const raw_events: any[] = row_json.events ?? [];
+        // Detect V3 (dense, each element has analyzer_index) vs V2 (sparse, nulls allowed).
+        const first_non_null = raw_events.find((e) => e !== null);
+        const is_v3 = first_non_null !== undefined && first_non_null.analyzer_index !== undefined;
+        const events: Event[] = is_v3
+            ? raw_events.map((e: any) => ({
+                  event_type: parse_event_type(e.event_type),
+                  message: e.message,
+                  analyzer_index: e.analyzer_index,
+              }))
+            : raw_events
+                  .map((e: any, i: number): Event | null => {
+                      if (e === null) {
+                          return null;
+                      }
+                      return {
+                          event_type: parse_event_type(e.event_type),
+                          message: e.message,
+                          analyzer_index: i,
+                      };
+                  })
+                  .filter((e): e is Event => e !== null);
+        if (events.length > 0) {
             rows.push({
                 type: AnalysisRowType.Analysis,
                 packet_timestamp: new Date(row_json.packet_timestamp),
@@ -105,12 +120,10 @@ function get_report_stats(rows: AnalysisRow[]): ReportStatistics {
             num_skipped_packets++;
         } else {
             for (const event of row.events) {
-                if (event !== null) {
-                    if (event.event_type === 'Informational') {
-                        num_informational_logs++;
-                    } else {
-                        num_warnings++;
-                    }
+                if (event.event_type === 'Informational') {
+                    num_informational_logs++;
+                } else {
+                    num_warnings++;
                 }
             }
         }

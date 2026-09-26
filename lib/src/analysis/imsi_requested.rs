@@ -87,6 +87,7 @@ impl ImsiRequestedAnalyzer {
                 self.flag = Some(Event {
                     event_type: EventType::High,
                     message: "Identity requested after auth request".to_string(),
+                    analyzer_index: 0,
                 });
             }
 
@@ -95,6 +96,7 @@ impl ImsiRequestedAnalyzer {
                 self.flag = Some(Event {
                     event_type: EventType::High,
                     message: "Identity requested without Attach Request".to_string(),
+                    analyzer_index: 0,
                 });
             }
 
@@ -103,6 +105,7 @@ impl ImsiRequestedAnalyzer {
                 self.flag = Some(Event {
                     event_type: EventType::Low,
                     message: "Identity requested without authentication but its likely a false positive unless your SIM card has an active plan".to_string(),
+                    analyzer_index: 0,
                 });
             }
 
@@ -112,6 +115,7 @@ impl ImsiRequestedAnalyzer {
                     self.flag = Some(Event {
                         event_type: EventType::High,
                         message: "Disconnected after Identity Request without Auth Accept on home network!".to_string(),
+                        analyzer_index: 0,
                     });
                 } else {
                     let enb_plmn_string = if self.likely_enb_plmns.is_empty() {
@@ -136,6 +140,7 @@ impl ImsiRequestedAnalyzer {
                             "Disconnected after Identity Request without Auth Accept, but this could be a false positive roaming issue - Tower PLMN: {}, UE PLMN: {}, SIM home PLMN: {}",
                             enb_plmn_string, ue_plmn_string, home_plmn_string,
                         ),
+                        analyzer_index: 0,
                     });
                 }
             }
@@ -305,6 +310,7 @@ impl Analyzer for ImsiRequestedAnalyzer {
                 self.flag = Some(Event {
                     event_type: EventType::Informational {},
                     message: "Identity request happened without auth request followup".to_string(),
+                    analyzer_index: 0,
                 });
                 self.timeout_counter = 0;
             }
