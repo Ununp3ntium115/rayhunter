@@ -37,6 +37,9 @@ pub struct ImsiRequestedAnalyzer {
     likely_ue_plmn: Option<String>,
     /// From the SIM (EF_HPLMNwAcT). Empty means unknown, not a mismatch.
     home_plmn: BTreeSet<String>,
+    /// Rayhunter started after the UE already sent AttachRequest; first IdentityRequest
+    /// has no prior attach context and should not trigger an alarm.
+    startup_gap: bool,
 }
 
 impl Default for ImsiRequestedAnalyzer {
@@ -54,6 +57,7 @@ impl ImsiRequestedAnalyzer {
             likely_enb_plmns: vec![],
             likely_ue_plmn: None,
             home_plmn,
+            startup_gap: false,
         }
     }
 
@@ -82,6 +86,11 @@ impl ImsiRequestedAnalyzer {
                 self.timeout_counter = 0;
             }
 
+            // New attach clears the startup-gap flag; we now have full context
+            (_, State::AttachRequest) => {
+                self.startup_gap = false;
+            }
+
             // IMSI or IMEI requested after auth accept
             (State::AuthAccept, State::IdentityRequest) => {
                 self.flag = Some(Event {
@@ -108,7 +117,11 @@ impl ImsiRequestedAnalyzer {
 
             // IMSI to Disconnect without AuthAccept
             (State::IdentityRequest, State::Disconnect) => {
-                if self.enb_is_home_network() {
+                if self.startup_gap {
+                    // Rayhunter started after the attach request was sent; the IdentityRequest
+                    // had no observable attach context, so this disconnect is not alarming.
+                    self.startup_gap = false;
+                } else if self.enb_is_home_network() {
                     self.flag = Some(Event {
                         event_type: EventType::High,
                         message: "Disconnected after Identity Request without Auth Accept on home network!".to_string(),
@@ -138,6 +151,13 @@ impl ImsiRequestedAnalyzer {
                         ),
                     });
                 }
+            }
+
+            // IdentityRequest from Unattached: rayhunter started mid-session without seeing
+            // the AttachRequest; flag as startup_gap so a subsequent disconnect doesn't alarm.
+            (State::Unattached, State::IdentityRequest) => {
+                self.startup_gap = true;
+                self.timeout_counter = 0;
             }
 
             (_, State::IdentityRequest) => {
@@ -212,7 +232,7 @@ impl Analyzer for ImsiRequestedAnalyzer {
             default_enabled: true,
             name: "IMSI Requested".into(),
             description: "Tests whether the ME sends an Identity Request NAS message without either an associated attach request or auth accept message".into(),
-            version: 5,
+            version: 6,
         }
     }
 
@@ -310,6 +330,71 @@ impl Analyzer for ImsiRequestedAnalyzer {
             }
         }
 
+        self.flag.take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn make_analyzer() -> ImsiRequestedAnalyzer {
+        ImsiRequestedAnalyzer::new(BTreeSet::new())
+    }
+
+    #[test]
+    fn startup_gap_suppresses_disconnect_alarm() {
+        // Rayhunter starts after AttachRequest was already sent; first observed message
+        // is IdentityRequest. The subsequent disconnect must NOT alarm.
+        let mut a = make_analyzer();
+        assert_eq!(a.state, State::Unattached);
+        a.transition(State::IdentityRequest, 1);
+        assert!(a.startup_gap);
+        let evt = a.transition_and_take(State::Disconnect, 2);
+        assert!(
+            evt.is_none(),
+            "startup-gap disconnect should not produce an event"
+        );
+        assert!(!a.startup_gap, "flag should be cleared after handling");
+    }
+
+    #[test]
+    fn full_session_still_alarms_on_disconnect() {
+        // Full observed session: AttachRequest → IdentityRequest → Disconnect should alarm.
+        let mut a = make_analyzer();
+        a.transition(State::AttachRequest, 1);
+        assert!(!a.startup_gap);
+        a.transition(State::IdentityRequest, 2);
+        assert!(!a.startup_gap);
+        let evt = a.transition_and_take(State::Disconnect, 3);
+        assert!(
+            evt.is_some(),
+            "full session disconnect should produce an event"
+        );
+    }
+
+    #[test]
+    fn startup_gap_cleared_by_attach_request() {
+        // After startup gap is set, a new AttachRequest clears it so the next
+        // session's IdentityRequest → Disconnect still alarms.
+        let mut a = make_analyzer();
+        a.transition(State::IdentityRequest, 1); // startup gap set
+        assert!(a.startup_gap);
+        a.transition(State::Disconnect, 2); // handled silently
+        a.transition(State::AttachRequest, 3); // new session → clears gap
+        assert!(!a.startup_gap);
+        a.transition(State::IdentityRequest, 4);
+        let evt = a.transition_and_take(State::Disconnect, 5);
+        assert!(evt.is_some(), "second session disconnect must still alarm");
+    }
+}
+
+// Helper used only in tests: call transition and return the flag.
+#[cfg(test)]
+impl ImsiRequestedAnalyzer {
+    fn transition_and_take(&mut self, next_state: State, packet_num: usize) -> Option<Event> {
+        self.transition(next_state, packet_num);
         self.flag.take()
     }
 }
