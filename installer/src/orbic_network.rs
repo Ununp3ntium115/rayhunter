@@ -10,6 +10,7 @@ use tokio::time::sleep;
 use crate::RAYHUNTER_DAEMON_INIT;
 use crate::connection::{
     TelnetConnection, install_config, install_wifi_tools, setup_data_directory,
+    stop_daemon_for_upgrade,
 };
 use crate::orbic_auth::{LoginInfo, LoginRequest, LoginResponse, encode_password};
 use crate::output::{eprintln, print, println};
@@ -239,6 +240,12 @@ async fn setup_rayhunter(admin_ip: &str, reset_config: bool, data_dir: &str) -> 
         false,
     )
     .await?;
+
+    // Stop any running daemon and remove the old binary before uploading the new one.
+    // On devices with tight partitions (e.g. Moxee) the running process holds the old
+    // inode open, so disk blocks aren't freed until the process exits.  Stopping first
+    // ensures only one copy of the binary needs to fit on the partition at a time.
+    stop_daemon_for_upgrade(&mut conn).await;
 
     telnet_send_file(
         addr,

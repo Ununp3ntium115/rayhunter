@@ -12,6 +12,7 @@ use anyhow::Result;
 use tokio::time::sleep;
 
 use crate::TmobileArgs as Args;
+use crate::connection::{TelnetConnection, stop_daemon_for_upgrade};
 use crate::output::{print, println};
 use crate::util::{reboot_device, telnet_send_command, telnet_send_file};
 use crate::wingtech::start_telnet;
@@ -49,6 +50,7 @@ async fn run_install(admin_ip: String, admin_password: String) -> Result<()> {
     .await?;
 
     let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
+    stop_daemon_for_upgrade(&mut TelnetConnection::new(addr, true)).await;
     telnet_send_file(
         addr,
         "/data/rayhunter/rayhunter-daemon",

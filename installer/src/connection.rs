@@ -15,6 +15,25 @@ pub trait DeviceConnection {
     -> impl Future<Output = Result<()>> + Send;
 }
 
+/// Stop a running rayhunter-daemon and remove its binary before an upgrade.
+///
+/// On devices with tight partitions (e.g. Moxee) the running daemon keeps the old
+/// binary's inode open, so the blocks aren't freed until the process exits.  Writing
+/// the new binary without stopping the daemon first therefore needs ~2× the binary
+/// size in free space — enough to overflow the partition.  Stopping first releases
+/// the inode and removes the old file so only one copy needs to fit at a time.
+///
+/// Both operations ignore errors: the daemon may not be running on a fresh install,
+/// and the binary may not exist yet.
+pub async fn stop_daemon_for_upgrade<C: DeviceConnection>(conn: &mut C) {
+    let _ = conn
+        .run_command("/etc/init.d/rayhunter_daemon stop 2>/dev/null; true")
+        .await;
+    let _ = conn
+        .run_command("rm -f /data/rayhunter/rayhunter-daemon 2>/dev/null; true")
+        .await;
+}
+
 /// Check if a file exists using a DeviceConnection
 pub async fn file_exists<C: DeviceConnection>(conn: &mut C, path: &str) -> bool {
     conn.run_command(&format!("test -f '{path}' && echo exists || echo missing"))
