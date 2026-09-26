@@ -23,6 +23,11 @@ ui_level = 1
 # 1 = double-tapping the power button starts new recording
 key_input_mode = 0
 
+# Orbic RC400L only: when true, a background watchdog re-enables the backlight
+# once per second whenever the screen goes to sleep.  Has no effect on other
+# devices.  Default: false
+keep_screen_on = false
+
 # If set, attempts to send a notification to the url when a new warning is triggered
 # ntfy_url = "https://ntfy.sh/your-topic"
 # What notification types to enable. Does nothing if the above ntfy_url is not set.
@@ -93,3 +98,4 @@ incomplete_sib = true
 test_analyzer = false
 diagnostic_analyzer = true
 no_nas_messages = false
+timing_advance_outlier = true
