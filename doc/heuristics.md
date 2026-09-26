@@ -90,6 +90,16 @@ A recording containing no diagnostic messages at all cannot trigger this analyze
 
 This heuristic is experimental. It may produce a false positive if the device receives radio traffic but cannot reach a network that produces NAS traffic.
 
+### Timing Advance Outlier
+
+This analyzer watches the uplink timing advance (TA) value that the device reports over the Qualcomm DIAG interface. The timing advance is the number of microseconds by which your device pre-shifts its transmissions so they arrive at the base station at exactly the right moment — a larger value means a greater physical distance between your device and the tower.
+
+Rayhunter collects TA samples and builds a running statistical baseline using Welford's online algorithm. After at least 20 samples, the analyzer flags any new TA value that deviates more than 2.5 standard deviations from the current mean.
+
+IMSI catchers are often deployed at unusual distances relative to the legitimate macro network. When a cell-site simulator takes over, the TA required by the fake station is typically very different from the legitimate tower's TA — often much smaller (close-range portable device) or, conversely, much larger (unusual placement). A sudden, sustained statistical outlier in TA with no change in physical location may indicate a tower switch to a rogue cell.
+
+False positives can occur when you move rapidly (car, train) and the device hands off to a distant cell, or when you cross a coverage boundary between cells at very different distances. Multiple consecutive alerts accompanied by other heuristic warnings should be treated with higher suspicion than a single isolated alert.
+
 ### Test Analyzer
 
 *(disabled by default)*
