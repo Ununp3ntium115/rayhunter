@@ -3,3 +3,8 @@
 .DS_Store
 /tools/build-wpa-supplicant
 /node_modules
+/.claude
+/.codegraph
+/.hermes
+/.mcp.json
+/.superpowers
