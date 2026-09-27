@@ -237,5 +237,9 @@ pub fn update_ui(
                 .await;
             tokio::time::sleep(Duration::from_millis(REFRESH_RATE)).await;
         }
+        // Clear to black so the charging BIOS doesn't fight a stale EFF logo.
+        let dims = fb.dimensions();
+        fb.write_buffer(vec![(0u8, 0u8, 0u8); (dims.height * dims.width) as usize])
+            .await;
     });
 }
