@@ -7,7 +7,7 @@ use crate::{Device, log_codes};
 
 use deku::prelude::*;
 use futures::TryStream;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::io::ErrorKind;
 use std::os::fd::AsRawFd;
 use std::time::Duration;
@@ -126,7 +126,7 @@ impl DiagDevice {
                         return Err(e);
                     }
 
-                    warn!(
+                    debug!(
                         "Diag device initialization failed {num_retries} times, retrying in {delay:?}: {e}"
                     );
                     sleep(delay).await;
