@@ -3,7 +3,7 @@ use std::io::stdin;
 
 use std::io::ErrorKind;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use adb_client::{ADBDeviceExt, ADBUSBDevice, RustADBError, search_adb_devices};
 use anyhow::{Context, Result, anyhow, bail};
@@ -394,7 +394,6 @@ async fn adb_serial_cmd(adb_device: &mut ADBUSBDevice, command: &str) -> Result<
     data.push_str("\r\n");
 
     let timeout = Duration::from_secs(2);
-    let mut response = [0; 256];
 
     // Set up the serial port appropriately
     adb_device
@@ -408,27 +407,57 @@ async fn adb_serial_cmd(adb_device: &mut ADBUSBDevice, command: &str) -> Result<
         .usb_bulk_write(INTERFACE, 0x2, data.as_bytes(), timeout)
         .context("Failed to write command")?;
 
-    // Consume the echoed command
-    adb_device
-        .get_transport_mut()
-        .usb_bulk_read(INTERFACE, 0x82, &mut response, timeout)
-        .context("Failed to read submitted command")?;
+    // The Orbic may split the echoed command and final response across multiple USB packets.
+    // Read until a terminal modem response instead of assuming exactly one packet for each.
+    let deadline = Instant::now() + timeout;
+    let mut response = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!(
+                "Timed out waiting for response to {command}: {}",
+                String::from_utf8_lossy(&response)
+            );
+        }
 
-    // Read the actual response
-    adb_device
-        .get_transport_mut()
-        .usb_bulk_read(INTERFACE, 0x82, &mut response, timeout)
-        .context("Failed to read response")?;
+        let mut packet = [0; 256];
+        let bytes_read = adb_device
+            .get_transport_mut()
+            .usb_bulk_read(INTERFACE, 0x82, &mut packet, remaining)
+            .context("Failed to read response")?;
+        response.extend_from_slice(&packet[..bytes_read]);
 
-    // For some reason, on macOS the response buffer gets filled with garbage data that's
-    // rarely valid UTF-8. Luckily we only care about the first couple bytes, so just drop
-    // the garbage with `from_utf8_lossy` and look for our expected success string.
-    let responsestr = String::from_utf8_lossy(&response);
-    if !responsestr.contains("\r\nOK\r\n") {
-        bail!("Received unexpected response: {0}", responsestr);
+        match serial_response_status(&response) {
+            SerialResponseStatus::Pending => {}
+            SerialResponseStatus::Success => break,
+            SerialResponseStatus::Error => {
+                bail!(
+                    "Device rejected command {command}: {}",
+                    String::from_utf8_lossy(&response)
+                );
+            }
+        }
     }
 
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SerialResponseStatus {
+    Pending,
+    Success,
+    Error,
+}
+
+fn serial_response_status(response: &[u8]) -> SerialResponseStatus {
+    let response = String::from_utf8_lossy(response);
+    if response.contains("\r\nERROR\r\n") {
+        SerialResponseStatus::Error
+    } else if response.contains("\r\nOK\r\n") {
+        SerialResponseStatus::Success
+    } else {
+        SerialResponseStatus::Pending
+    }
 }
 
 /// Sends an AT command to the usb device over the serial port
@@ -462,26 +491,33 @@ pub async fn send_serial_cmd(interface: &Interface, command: &str) -> Result<()>
         .into_result()
         .context("Failed to write command")?;
 
-    // Consume the echoed command
-    tokio::time::timeout(timeout, interface.bulk_in(0x82, RequestBuffer::new(256)))
-        .await
-        .context("Timed out reading submitted command")?
-        .into_result()
-        .context("Failed to read submitted command")?;
-
-    // Read the actual response
-    let response = tokio::time::timeout(timeout, interface.bulk_in(0x82, RequestBuffer::new(256)))
-        .await
-        .context("Timed out reading response")?
-        .into_result()
-        .context("Failed to read response")?;
-
-    // For some reason, on macOS the response buffer gets filled with garbage data that's
-    // rarely valid UTF-8. Luckily we only care about the first couple bytes, so just drop
-    // the garbage with `from_utf8_lossy` and look for our expected success string.
-    let responsestr = String::from_utf8_lossy(&response);
-    if !responsestr.contains("\r\nOK\r\n") {
-        bail!("Received unexpected response: {0}", responsestr);
+    let deadline = Instant::now() + timeout;
+    let mut response = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!(
+                "Timed out waiting for response to {command}: {}",
+                String::from_utf8_lossy(&response)
+            );
+        }
+        let packet =
+            tokio::time::timeout(remaining, interface.bulk_in(0x82, RequestBuffer::new(256)))
+                .await
+                .context("Timed out reading response")?
+                .into_result()
+                .context("Failed to read response")?;
+        response.extend_from_slice(&packet);
+        match serial_response_status(&response) {
+            SerialResponseStatus::Pending => {}
+            SerialResponseStatus::Success => break,
+            SerialResponseStatus::Error => {
+                bail!(
+                    "Device rejected command {command}: {}",
+                    String::from_utf8_lossy(&response)
+                );
+            }
+        }
     }
 
     Ok(())
@@ -550,7 +586,7 @@ fn is_orbic_usb_vendor(vendor_id: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_orbic_usb_vendor;
+    use super::{SerialResponseStatus, is_orbic_usb_vendor, serial_response_status};
 
     #[test]
     fn accepts_orbic_vendor_regardless_of_usb_product_mode() {
@@ -560,5 +596,30 @@ mod tests {
     #[test]
     fn rejects_unrelated_usb_vendors() {
         assert!(!is_orbic_usb_vendor(0x18d1));
+    }
+
+    #[test]
+    fn fragmented_serial_response_is_pending_until_ok_marker_arrives() {
+        let mut response = Vec::from(&b"\r\nAT+SYSCMD=mv /tmp/rootshell /bin/rootshell\r\n"[..]);
+
+        assert_eq!(
+            serial_response_status(&response),
+            SerialResponseStatus::Pending
+        );
+
+        response.extend_from_slice(b"\r\nOK\r\n");
+
+        assert_eq!(
+            serial_response_status(&response),
+            SerialResponseStatus::Success
+        );
+    }
+
+    #[test]
+    fn serial_error_response_is_reported_as_error() {
+        assert_eq!(
+            serial_response_status(b"\r\nERROR\r\n"),
+            SerialResponseStatus::Error
+        );
     }
 }
