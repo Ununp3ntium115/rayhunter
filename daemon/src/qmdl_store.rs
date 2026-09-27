@@ -137,6 +137,10 @@ pub struct ManifestEntry {
     /// Device model name (e.g., "orbic", "tplink") when recording started
     #[serde(default)]
     pub device_model: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 impl ManifestEntry {
@@ -157,6 +161,8 @@ impl ManifestEntry {
             compressed: true,
             metadata_version: 1,
             device_model: recording_metadata.device_model,
+            display_name: None,
+            notes: None,
         }
     }
 
@@ -288,6 +294,8 @@ impl RecordingStore {
                 gps_mode: None,
                 metadata_version: 0,
                 device_model: None,
+                display_name: None,
+                notes: None,
             });
         }
 
@@ -482,6 +490,23 @@ impl RecordingStore {
             self.write_manifest().await?;
         }
         Ok(())
+    }
+
+    pub async fn set_entry_label(
+        &mut self,
+        name: &str,
+        display_name: Option<String>,
+        notes: Option<String>,
+    ) -> Result<(), RecordingStoreError> {
+        let entry = self
+            .manifest
+            .entries
+            .iter_mut()
+            .find(|e| e.name == name)
+            .ok_or(RecordingStoreError::NoSuchEntryError)?;
+        entry.display_name = display_name;
+        entry.notes = notes;
+        self.write_manifest().await
     }
 
     pub async fn mark_entry_as_uploaded(
@@ -894,10 +919,7 @@ mod tests {
 
         // Verify each entry has its device model persisted correctly
         for (i, entry) in loaded_store.manifest.entries.iter().enumerate() {
-            assert_eq!(
-                entry.device_model.as_ref().map(|s| s.as_str()),
-                Some(devices[i])
-            );
+            assert_eq!(entry.device_model.as_deref(), Some(devices[i]));
             assert_eq!(entry.metadata_version, 1);
         }
     }
