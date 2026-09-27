@@ -217,7 +217,10 @@ impl DeviceConnection for ADBUSBDevice {
         print!("Sending file {dest} ... ");
         // Prevent path traversal attacks by rejecting paths containing '..'.
         let dest_path = Path::new(dest);
-        if dest_path.components().any(|c| c == std::path::Component::ParentDir) {
+        if dest_path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
             bail!("Invalid input: {}", dest_path.display());
         }
         let file_name = dest_path

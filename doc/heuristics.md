@@ -185,10 +185,10 @@ Detects aggressive measurement report patterns indicating signal strength profil
 
 A MeasurementReport message (sent on the uplink dedicated control channel, UL-DCCH) normally contains signal strength metrics (RSRP/RSRQ) for the serving and neighbor cells. Legitimate networks request periodic measurement reports every 10-40 seconds to support mobility and handover decisions. IMSI catchers may request frequent measurement reports to build detailed UE location profiles, enabling handover spoofing, location tracking, or cipher algorithm downgrade attacks. The attacker uses the measurement data to predict optimal handover points and intercept the device during transitions.
 
-This analyzer triggers on two independent conditions:
-
-**High Severity:** 12 or more measurement reports within a 60-second time window (rate of 1 report per 5 seconds or faster). After alert fires, the detector resets to prevent duplicate alerts within that burst.
+This analyzer triggers on two independent conditions (both may fire during a single aggressive burst):
 
 **Medium Severity:** More than 5 measurement reports within a 120-second time window (i.e., 6+). Fires once per recording to indicate sustained, aggressive profiling activity.
+
+**High Severity:** 12 or more measurement reports within a 60-second time window (rate of 1 report per 5 seconds or faster). After alert fires, the detector requires a 60-second gap before re-firing to prevent duplicate alerts within the same burst. A typical aggressive profiling attack sequence: 6th report triggers MEDIUM alert, 12th report triggers HIGH alert, subsequent bursts only re-trigger HIGH after a 60-second cooldown.
 
 **False positive conditions:** Event-triggered measurement reports (A2/A3 events) during high mobility scenarios (train, highway) produce legitimate bursts. Cell-edge oscillation in marginal coverage areas causes frequent re-measurement. Dense small-cell deployments (femtocells, picocells) with optimized MDT (Minimization of Drive Tests) configurations generate higher report densities per 3GPP standards. LTE handover preparation in congested urban areas legitimately increases report frequency. If other IMSI catcher heuristics (e.g., paging storm, connection release storm, null cipher) do not corroborate, the measurement rate may reflect network mobility optimization rather than malicious profiling activity.
