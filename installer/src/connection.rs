@@ -45,18 +45,43 @@ pub async fn check_free_space<C: DeviceConnection>(
     Ok(())
 }
 
-/// Parse the "Available" column (4th field, 0-indexed col 3) from a POSIX `df -k` data line.
+/// Parse the "Available" column from a `df -k` data line.
+///
+/// POSIX columns are `Filesystem 1K-blocks Used Available Use% Mountpoint`, but BusyBox
+/// wraps long filesystem names onto their own line, so the last line may lack the first
+/// column. Anchor on the `Use%` field instead: "Available" is always the field before it.
 fn parse_df_available_kb(output: &str) -> Option<u64> {
-    // POSIX df -k columns: Filesystem  1K-blocks  Used  Available  Use%  Mountpoint
     for line in output.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 4
-            && let Ok(kb) = parts[3].parse::<u64>()
+        let Some(pct_idx) = parts.iter().position(|p| p.ends_with('%')) else {
+            continue;
+        };
+        if pct_idx >= 1
+            && let Ok(kb) = parts[pct_idx - 1].parse::<u64>()
         {
             return Some(kb);
         }
     }
     None
+}
+
+/// Stop a running rayhunter-daemon and remove its binary before an upgrade.
+///
+/// On devices with tight partitions (e.g. Moxee) the running daemon keeps the old
+/// binary's inode open, so the blocks aren't freed until the process exits.  Writing
+/// the new binary without stopping the daemon first therefore needs ~2× the binary
+/// size in free space — enough to overflow the partition.  Stopping first releases
+/// the inode and removes the old file so only one copy needs to fit at a time.
+///
+/// Both operations ignore errors: the daemon may not be running on a fresh install,
+/// and the binary may not exist yet.
+pub async fn stop_daemon_for_upgrade<C: DeviceConnection>(conn: &mut C) {
+    let _ = conn
+        .run_command("/etc/init.d/rayhunter_daemon stop 2>/dev/null; true")
+        .await;
+    let _ = conn
+        .run_command("rm -f /data/rayhunter/rayhunter-daemon 2>/dev/null; true")
+        .await;
 }
 
 /// Check if a file exists using a DeviceConnection
@@ -288,15 +313,19 @@ mod tests {
     #[test]
     fn parse_df_busybox_wrapped_filesystem_name() {
         // BusyBox df wraps long names; tail -n 1 gives us only the numbers line.
-        let output = "112000";
-        // With just one token this won't parse (need 4 fields), but tail -n1 gives the data row.
-        let output2 = "/dev/ubi0_0      204800   98304   106496  48% /data";
-        assert_eq!(parse_df_available_kb(output2), Some(106496));
+        let output = "                  204800     98304    106496  48% /data";
+        assert_eq!(parse_df_available_kb(output), Some(106496));
+        let output = "/dev/ubi0_0      204800   98304   106496  48% /data";
+        assert_eq!(parse_df_available_kb(output), Some(106496));
     }
 
     #[test]
     fn parse_df_returns_none_for_garbage() {
         assert_eq!(parse_df_available_kb("no numbers here"), None);
         assert_eq!(parse_df_available_kb(""), None);
+        assert_eq!(
+            parse_df_available_kb("Filesystem 1K-blocks Used Available Use% Mounted on"),
+            None
+        );
     }
 }
