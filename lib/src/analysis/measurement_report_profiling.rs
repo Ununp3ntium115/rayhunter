@@ -161,8 +161,18 @@ mod tests {
     }
 
     fn measurement_report_ie() -> InformationElement {
+        use telcom_parser::lte_rrc::{MeasResults, MeasResultsMeasResultPCell, RSRP_Range, RSRQ_Range};
+
+        let meas_results = MeasResults {
+            meas_id: telcom_parser::lte_rrc::MeasId(0),
+            meas_result_p_cell: MeasResultsMeasResultPCell {
+                rsrp_result: RSRP_Range(100),
+                rsrq_result: RSRQ_Range(50),
+            },
+            meas_result_neigh_cells: None,
+        };
         let r8_ies = MeasurementReport_r8_IEs {
-            measured_results: None,
+            meas_results,
             non_critical_extension: None,
         };
         let report = MeasurementReport {
@@ -243,12 +253,18 @@ mod tests {
     }
 
     #[test]
-    fn eleven_reports_60s_triggers_high() {
+    fn eleven_reports_60s_returns_none() {
         let mut a = MeasurementReportProfilingAnalyzer::new();
-        // Add 11 reports in 60s (below ≥12 threshold)
+        let base_ts = ts();
+        // Add 11 reports in 60s (below ≥12 threshold, spaced 5400ms apart = 54s total)
         for i in 0..11 {
-            let ts = ts() + Duration::milliseconds(i as i64 * 5500);
+            let ts = base_ts + Duration::milliseconds(i as i64 * 5400);
             let ev = a.analyze_information_element(&measurement_report_ie(), (i + 1) as usize, ts);
+            let ev_result = if ev.is_some() { "ALERT" } else { "NO ALERT" };
+            eprintln!(
+                "Report {}: ts offset={}ms, result={}",
+                i, i as i64 * 5400, ev_result
+            );
             assert!(ev.is_none(), "11 reports should not exceed ≥12 threshold");
         }
     }
@@ -256,7 +272,7 @@ mod tests {
     #[test]
     fn twelve_reports_60s_triggers_high() {
         let mut a = MeasurementReportProfilingAnalyzer::new();
-        // Add 12 reports in 60s (reaches ≥12 threshold)
+        // Add 12 reports in 60s (reaches ≥12 threshold, spaced 5000ms apart = 55s total)
         for i in 0..12 {
             let ts = ts() + Duration::milliseconds(i as i64 * 5000);
             let ev = a.analyze_information_element(&measurement_report_ie(), (i + 1) as usize, ts);
@@ -326,7 +342,8 @@ mod tests {
         // The new window starts at 61s, so we add 11 more reports in quick succession
         for i in 1..12 {
             let ts = base_ts + Duration::seconds(61) + Duration::milliseconds(i as i64 * 1000);
-            let ev = a.analyze_information_element(&measurement_report_ie(), (12 + i + 1) as usize, ts);
+            let ev =
+                a.analyze_information_element(&measurement_report_ie(), (12 + i + 1) as usize, ts);
             if i == 11 {
                 assert!(ev.is_some(), "should re-fire HIGH alert after 60s cooldown");
                 assert_eq!(ev.unwrap().event_type, EventType::High);
@@ -341,8 +358,8 @@ mod tests {
 
         // Add 6 reports to trigger MEDIUM alert
         for i in 0..6 {
-            let ts = base_ts + Duration::seconds(i * 20);
-            let ev = a.analyze_information_element(&measurement_report_ie(), i + 1, ts);
+            let ts = base_ts + Duration::seconds(i as i64 * 20);
+            let ev = a.analyze_information_element(&measurement_report_ie(), (i + 1) as usize, ts);
             if i == 5 {
                 assert!(ev.is_some(), "6th report should trigger MEDIUM alert");
             }
@@ -350,8 +367,8 @@ mod tests {
 
         // Add more reports; MEDIUM alert should not fire again
         for i in 6..10 {
-            let ts = base_ts + Duration::seconds(i * 20);
-            let ev = a.analyze_information_element(&measurement_report_ie(), i + 1, ts);
+            let ts = base_ts + Duration::seconds(i as i64 * 20);
+            let ev = a.analyze_information_element(&measurement_report_ie(), (i + 1) as usize, ts);
             assert!(
                 ev.is_none(),
                 "MEDIUM alert should only fire once per recording"
@@ -367,7 +384,7 @@ mod tests {
         // Add 12 reports in 60s to trigger HIGH alert
         for i in 0..12 {
             let ts = base_ts + Duration::milliseconds(i as i64 * 5000);
-            let ev = a.analyze_information_element(&measurement_report_ie(), i + 1, ts);
+            let ev = a.analyze_information_element(&measurement_report_ie(), (i + 1) as usize, ts);
             if i == 11 {
                 assert!(ev.is_some(), "should fire HIGH alert");
                 assert_eq!(ev.unwrap().event_type, EventType::High);
@@ -393,8 +410,8 @@ mod tests {
 
         // Add 6 reports over 120 seconds
         for i in 0..6 {
-            let ts = base_ts + Duration::seconds(i * 20);
-            a.analyze_information_element(&measurement_report_ie(), i + 1, ts);
+            let ts = base_ts + Duration::seconds(i as i64 * 20);
+            a.analyze_information_element(&measurement_report_ie(), (i + 1) as usize, ts);
         }
 
         // Add one more report 121s later; only the new one remains + most recent from the tail
@@ -419,7 +436,7 @@ mod tests {
         // Add 11 reports within 55s (5s apart, typical profiling pattern)
         for i in 0..11 {
             let ts = base_ts + Duration::seconds(i as i64 * 5);
-            let ev = a.analyze_information_element(&measurement_report_ie(), i + 1, ts);
+            let ev = a.analyze_information_element(&measurement_report_ie(), (i + 1) as usize, ts);
             assert!(ev.is_none(), "11 reports below ≥12 threshold");
         }
 
@@ -445,7 +462,7 @@ mod tests {
         // Add 8 reports over 119s (mimicking 1790459359.pcapng pattern)
         for i in 0..8 {
             let ts = base_ts + Duration::seconds(i as i64 * 15);
-            let ev = a.analyze_information_element(&measurement_report_ie(), i + 1, ts);
+            let ev = a.analyze_information_element(&measurement_report_ie(), (i + 1) as usize, ts);
             if i == 5 {
                 // 6th report should trigger MEDIUM alert
                 assert!(ev.is_some(), "should fire MEDIUM alert on 6th report");
