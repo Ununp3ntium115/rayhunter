@@ -100,13 +100,31 @@ pub async fn install_config<C: DeviceConnection>(
     reset_config: bool,
 ) -> Result<()> {
     let config_path = "/data/rayhunter/config.toml";
-    if reset_config || !file_exists(conn, config_path).await {
+    let needs_write = reset_config
+        || !file_exists(conn, config_path).await
+        || !config_has_device_key(conn, config_path).await;
+    if needs_write {
+        if !reset_config && file_exists(conn, config_path).await {
+            println!(
+                "Existing config is missing the 'device' setting (old installation); rewriting"
+            );
+        }
         let config = crate::set_device_in_config(device_type)?;
         conn.write_file(config_path, config.as_bytes()).await?;
     } else {
         println!("Config file already exists, skipping (use --reset-config to overwrite)");
     }
     Ok(())
+}
+
+async fn config_has_device_key<C: DeviceConnection>(conn: &mut C, config_path: &str) -> bool {
+    conn.run_command(&format!(
+        // Anchored so the template's commented-out `#device = "orbic"` line doesn't count.
+        "grep -q '^[[:space:]]*device[[:space:]]*=' '{config_path}' 2>/dev/null && echo YES || echo NO"
+    ))
+    .await
+    .map(|out| out.contains("YES"))
+    .unwrap_or(true) // if check fails, assume config is valid to avoid spurious rewrites
 }
 
 /// Install wifi tools (wpa_supplicant, wpa_cli, iw) to /data/rayhunter/bin.
