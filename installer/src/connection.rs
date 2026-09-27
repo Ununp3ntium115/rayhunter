@@ -32,10 +32,7 @@ pub async fn install_config<C: DeviceConnection>(
 ) -> Result<()> {
     let config_path = "/data/rayhunter/config.toml";
     if reset_config || !file_exists(conn, config_path).await {
-        let config = crate::CONFIG_TOML.replace(
-            r#"#device = "orbic""#,
-            &format!(r#"device = "{device_type}""#),
-        );
+        let config = crate::set_device_in_config(device_type)?;
         conn.write_file(config_path, config.as_bytes()).await?;
     } else {
         println!("Config file already exists, skipping (use --reset-config to overwrite)");

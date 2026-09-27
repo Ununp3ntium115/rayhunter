@@ -16,14 +16,14 @@
 <div class="flex flex-col gap-4 items-center max-w-lg mx-auto px-4">
     <h1 class="font-bold text-2xl text-center">Connect Your Device</h1>
     <p class="text-gray-600 text-center">
-        Follow these steps to connect <strong>{subcommand.label}</strong> to your computer before
-        installing Rayhunter.
+        Follow these steps to connect <strong>{subcommand.label}</strong> to your computer before installing
+        Rayhunter.
     </p>
     <ol class="space-y-3 text-base w-full list-decimal list-inside">
         <li>Connect the hotspot to your computer using a USB cable.</li>
         <li>
-            Enable USB tethering on the device's screen or settings menu (sometimes called
-            "Internet sharing via USB").
+            Enable USB tethering on the device's screen or settings menu (sometimes called "Internet
+            sharing via USB").
             <ul class="list-disc list-inside ml-4 mt-1 text-gray-700 space-y-1">
                 <li>
                     Alternatively, connect your computer's WiFi to the device's hotspot network.
@@ -36,8 +36,8 @@
                 <li>Orbic: <code class="font-mono text-sm">http://192.168.1.1</code></li>
                 <li>TP-Link: <code class="font-mono text-sm">http://192.168.0.1</code></li>
                 <li>
-                    Other devices: try <code class="font-mono text-sm">http://192.168.1.1</code> or
-                    check your device's documentation.
+                    Other devices: try <code class="font-mono text-sm">http://192.168.1.1</code> or check
+                    your device's documentation.
                 </li>
             </ul>
         </li>

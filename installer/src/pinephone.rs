@@ -9,11 +9,11 @@ use nusb::Interface;
 use nusb::transfer::{Control, ControlType, Recipient, RequestBuffer};
 use tokio::time::sleep;
 
+use crate::RAYHUNTER_DAEMON_INIT;
 use crate::connection::DeviceConnection;
 use crate::orbic::test_rayhunter;
 use crate::output::{print, println};
 use crate::util::open_usb_device;
-use crate::{CONFIG_TOML, RAYHUNTER_DAEMON_INIT};
 
 const USB_VENDOR_ID: u16 = 0x2C7C;
 const USB_PRODUCT_ID: u16 = 0x125;
@@ -32,13 +32,9 @@ pub async fn install() -> Result<()> {
     let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
     adb.write_file("/data/rayhunter/rayhunter-daemon", rayhunter_daemon_bin)
         .await?;
-    adb.write_file(
-        "/data/rayhunter/config.toml",
-        CONFIG_TOML
-            .replace("#device = \"orbic\"", "device = \"pinephone\"")
-            .as_bytes(),
-    )
-    .await?;
+    let config = crate::set_device_in_config("pinephone")?;
+    adb.write_file("/data/rayhunter/config.toml", config.as_bytes())
+        .await?;
     adb.write_file(
         "/etc/init.d/rayhunter_daemon",
         RAYHUNTER_DAEMON_INIT.as_bytes(),

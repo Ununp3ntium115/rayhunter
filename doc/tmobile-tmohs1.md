@@ -59,6 +59,9 @@ Then run the installer:
 | Paused           | WiFi LED blinks white.         |
 | Warning Detected | Signal LED slowly blinks red.  |
 
+### Firmware compatibility note
+Rayhunter has been tested and verified on firmware TMOHS1_00.05.20 and later. On older firmware versions (e.g., TMOHS1_00.04.18), the modem's status daemon may write to the green LED signal (`led:signal_green`) concurrently with Rayhunter's LED control, causing LED oscillation between blue and green during recording. While functionality is retained and recording/warning states remain distinguishable, the visual indicator is less clean on these older firmware versions. Upgrading to TMOHS1_00.05.20 or later is recommended for the best experience.
+
 ## Wi-Fi auto-shutdown
 
 By default the TMOHS1 turns off its Wi-Fi access point after 10 minutes with no connected clients. Rayhunter keeps recording on the device in the background, but once the access point is down you can't reach the web UI, download captures, or see new warnings until you power cycle the hotspot.

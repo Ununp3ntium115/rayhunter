@@ -118,7 +118,11 @@
 {#if currentScreen === 'DeviceSelection' || selectedDevice === null}
     <DeviceSelect initialSelection={selectedDevice} {set_device} subcommands={data.subcommands} />
 {:else if currentScreen === 'DeviceConnect'}
-    <DeviceConnect subcommand={selectedDevice} go_back={reselect_device} continue_to_args={go_to_args} />
+    <DeviceConnect
+        subcommand={selectedDevice}
+        go_back={reselect_device}
+        continue_to_args={go_to_args}
+    />
 {:else if currentScreen === 'ArgSelection'}
     <ArgMenu
         bind:inputData={argMenuData}

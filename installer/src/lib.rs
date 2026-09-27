@@ -32,6 +32,83 @@ use crate::output::eprintln;
 static CONFIG_TOML: &str = include_str!("../../dist/config.toml.in");
 static RAYHUNTER_DAEMON_INIT: &str = include_str!("../../dist/scripts/rayhunter_daemon");
 
+/// Replace the device name in the config template with the target device.
+/// Returns the modified config string, or an error if the replacement failed
+/// (e.g., the expected placeholder is missing from the template).
+pub(crate) fn set_device_in_config(device_name: &str) -> Result<String, Error> {
+    let placeholder = "#device = \"orbic\"";
+    let replacement = format!("device = \"{}\"", device_name);
+    let result = CONFIG_TOML.replace(placeholder, &replacement);
+
+    // Verify the replacement happened; if the result contains the placeholder,
+    // the replacement failed and we're about to write an invalid config
+    if result.contains(placeholder) {
+        anyhow::bail!(
+            "Failed to set device name in config: placeholder '{}' not found in template",
+            placeholder
+        );
+    }
+
+    Ok(result)
+}
+
+#[cfg(test)]
+mod test_device_config {
+    use super::*;
+
+    #[test]
+    fn test_set_device_in_config_tmobile() {
+        let config = set_device_in_config("tmobile").expect("Failed to set device");
+        assert!(
+            config.contains("device = \"tmobile\""),
+            "Config should contain 'device = \"tmobile\"'"
+        );
+        assert!(
+            !config.contains("#device"),
+            "Config should not contain commented device line"
+        );
+    }
+
+    #[test]
+    fn test_set_device_in_config_wingtech() {
+        let config = set_device_in_config("wingtech").expect("Failed to set device");
+        assert!(
+            config.contains("device = \"wingtech\""),
+            "Config should contain 'device = \"wingtech\"'"
+        );
+        assert!(
+            !config.contains("#device"),
+            "Config should not contain commented device line"
+        );
+    }
+
+    #[test]
+    fn test_set_device_in_config_pinephone() {
+        let config = set_device_in_config("pinephone").expect("Failed to set device");
+        assert!(
+            config.contains("device = \"pinephone\""),
+            "Config should contain 'device = \"pinephone\"'"
+        );
+        assert!(
+            !config.contains("#device"),
+            "Config should not contain commented device line"
+        );
+    }
+
+    #[test]
+    fn test_set_device_in_config_uz801() {
+        let config = set_device_in_config("uz801").expect("Failed to set device");
+        assert!(
+            config.contains("device = \"uz801\""),
+            "Config should contain 'device = \"uz801\"'"
+        );
+        assert!(
+            !config.contains("#device"),
+            "Config should not contain commented device line"
+        );
+    }
+}
+
 // We mark this as public so it can be used by installer-gui to programmatically introspect the
 // installer's options.
 #[derive(Parser, Debug)]

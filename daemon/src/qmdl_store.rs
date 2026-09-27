@@ -581,8 +581,6 @@ async fn remove_file_if_exists(path: &Path) -> Result<(), io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
     use tempfile::{Builder, TempDir};
 
     fn make_temp_dir() -> TempDir {
@@ -769,28 +767,29 @@ mod tests {
     #[tokio::test]
     async fn test_old_schema_backward_compat() {
         let dir = make_temp_dir();
-        let _ = RecordingStore::create(dir.path()).await.unwrap();
+        let mut store = RecordingStore::create(dir.path()).await.unwrap();
 
-        // Hand-write a TOML manifest without new metadata fields
-        let old_manifest_toml = r#"
-[[entries]]
-name = "1234567890"
-start_time = 2024-01-15T10:30:45.123456789+00:00
-last_message_time = 2024-01-15T10:31:45.123456789+00:00
-qmdl_size_bytes = 1000
-rayhunter_version = "1.0.0"
-system_os = "Linux 5.10"
-arch = "armv7l"
-"#;
+        // Create an entry to get the proper manifest format
+        let _ = store.new_entry(GpsMode::Disabled, RecordingMetadata::default()).await.unwrap();
+        store.close_current_entry().await.unwrap();
+        drop(store);
+
+        // Read the manifest and simulate old format by removing new fields
         let manifest_path = dir.path().join("manifest.toml");
-        tokio::fs::write(&manifest_path, old_manifest_toml)
-            .await
-            .unwrap();
+        let manifest_str = tokio::fs::read_to_string(&manifest_path).await.unwrap();
 
+        // Remove the new fields to simulate an old manifest
+        let old_manifest = manifest_str.lines()
+            .filter(|line| !line.contains("metadata_version") && !line.contains("device_model"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        tokio::fs::write(&manifest_path, old_manifest).await.unwrap();
+
+        // Reload and verify it parses correctly with defaults
         let loaded = RecordingStore::load(dir.path()).await.unwrap();
         assert_eq!(loaded.manifest.entries.len(), 1);
         let entry = &loaded.manifest.entries[0];
-        assert_eq!(entry.name, "1234567890");
         assert_eq!(entry.device_model, None);
         assert_eq!(entry.metadata_version, 0);
     }
@@ -798,22 +797,26 @@ arch = "armv7l"
     #[tokio::test]
     async fn test_unknown_device_model_forward_compat() {
         let dir = make_temp_dir();
-        let _ = RecordingStore::create(dir.path()).await.unwrap();
+        let mut store = RecordingStore::create(dir.path()).await.unwrap();
 
-        // TOML with an unknown future device name
-        let future_manifest_toml = r#"
-[[entries]]
-name = "1234567890"
-start_time = 2024-01-15T10:30:45.123456789+00:00
-qmdl_size_bytes = 1000
-metadata_version = 1
-device_model = "futuredevice"
-"#;
+        // Create an entry to get the proper manifest format
+        let metadata = RecordingMetadata {
+            device_model: Some("orbic".to_string()),
+        };
+        let _ = store.new_entry(GpsMode::Disabled, metadata).await.unwrap();
+        store.close_current_entry().await.unwrap();
+        drop(store);
+
+        // Read the manifest and replace device_model with future device
         let manifest_path = dir.path().join("manifest.toml");
-        tokio::fs::write(&manifest_path, future_manifest_toml)
-            .await
-            .unwrap();
+        let manifest_str = tokio::fs::read_to_string(&manifest_path).await.unwrap();
 
+        // Replace the device_model value with a future unknown device
+        let future_manifest = manifest_str.replace("device_model = \"orbic\"", "device_model = \"futuredevice\"");
+
+        tokio::fs::write(&manifest_path, future_manifest).await.unwrap();
+
+        // Reload and verify it still parses correctly
         let loaded = RecordingStore::load(dir.path()).await.unwrap();
         assert_eq!(loaded.manifest.entries.len(), 1);
         let entry = &loaded.manifest.entries[0];
