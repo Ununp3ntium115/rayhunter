@@ -166,6 +166,7 @@ pub async fn install(
     admin_password: Option<String>,
     reset_config: bool,
     data_dir: Option<String>,
+    remount_root: bool,
 ) -> Result<()> {
     let Some(admin_password) = admin_password else {
         eprintln!(
@@ -190,7 +191,7 @@ pub async fn install(
     println!("done");
 
     let data_dir = data_dir.unwrap_or_else(|| "/data/rayhunter-data".to_string());
-    setup_rayhunter(&admin_ip, reset_config, &data_dir).await
+    setup_rayhunter(&admin_ip, reset_config, &data_dir, remount_root).await
 }
 
 async fn wait_for_telnet(admin_ip: &str) -> Result<()> {
@@ -214,20 +215,26 @@ async fn wait_for_telnet(admin_ip: &str) -> Result<()> {
     Ok(())
 }
 
-async fn setup_rayhunter(admin_ip: &str, reset_config: bool, data_dir: &str) -> Result<()> {
+pub(crate) async fn setup_rayhunter(
+    admin_ip: &str,
+    reset_config: bool,
+    data_dir: &str,
+    remount_root: bool,
+) -> Result<()> {
     let addr = SocketAddr::from_str(&format!("{admin_ip}:{TELNET_PORT}"))?;
     let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
 
-    // Remount filesystem as read-write to allow modifications
-    // This is really only necessary for the Moxee Hotspot
-    telnet_send_command(
-        addr,
-        "mount -o remount,rw /dev/ubi0_0 /",
-        "exit code 0",
-        false,
-    )
-    .await?;
-
+    // Orbic firmware already exposes the installation paths as writable. The
+    // remount is retained for Moxee, whose root filesystem requires it.
+    if remount_root {
+        telnet_send_command(
+            addr,
+            "mount -o remount,rw /dev/ubi0_0 /",
+            "exit code 0",
+            false,
+        )
+        .await?;
+    }
     let mut conn = TelnetConnection::new(addr, false);
     setup_data_directory(&mut conn, data_dir).await?;
 
