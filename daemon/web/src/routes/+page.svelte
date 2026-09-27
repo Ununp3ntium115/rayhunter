@@ -268,7 +268,9 @@
                     </div>
                 </Alert>
             {/if}
-            <SystemStatsTable stats={system_stats!} {gps_data} {gps_mode} />
+            {#if system_stats !== undefined}
+                <SystemStatsTable stats={system_stats} {gps_data} {gps_mode} />
+            {/if}
         </div>
         <div class="flex flex-col gap-2">
             <div class="flex flex-row gap-2">

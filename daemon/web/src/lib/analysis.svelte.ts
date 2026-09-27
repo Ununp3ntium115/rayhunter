@@ -1,6 +1,19 @@
 import { parse_ndjson, type NewlineDeliminatedJson } from './ndjson';
 import { req } from './utils.svelte';
 
+// Raw JSON shapes received from the daemon's NDJSON analysis report format.
+type RawReportMetadata = {
+    analyzers: AnalyzerMetadata[];
+    rayhunter?: RayhunterMetadata;
+    report_version?: number;
+};
+type RawEvent = { event_type: string; message: string; analyzer_index?: number };
+type RawAnalysisRow = {
+    skipped_message_reason?: string;
+    events?: (RawEvent | null)[];
+    packet_timestamp: string;
+};
+
 export type AnalysisReport = {
     metadata: ReportMetadata;
     rows: AnalysisRow[];
@@ -21,10 +34,13 @@ export class ReportMetadata {
     public rayhunter: RayhunterMetadata;
     public report_version: number;
 
-    constructor(ndjson: any) {
-        this.analyzers = ndjson.analyzers;
-        this.rayhunter = ndjson.rayhunter;
-        this.report_version = ndjson.report_version || 2; // Default to v2
+    constructor(ndjson: unknown) {
+        // SAFETY: ndjson is report_json[0] from the daemon's NDJSON report — always the metadata line.
+        const raw = ndjson as RawReportMetadata;
+        this.analyzers = raw.analyzers;
+        // SAFETY: rayhunter field is always present in daemon NDJSON output.
+        this.rayhunter = raw.rayhunter as RayhunterMetadata;
+        this.report_version = raw.report_version ?? 2;
     }
 }
 
@@ -65,48 +81,48 @@ export type Event = {
     analyzer_index: number;
 };
 
-function parse_event_type(raw: string): EventType {
-    if (!['Informational', 'Low', 'Medium', 'High'].includes(raw)) {
-        throw `Invalid/unhandled event type: ${raw}`;
-    }
-    return raw as EventType;
+function is_event_type(s: string): s is EventType {
+    return (['Informational', 'Low', 'Medium', 'High'] as const).some((t) => t === s);
 }
 
-function get_rows(row_jsons: any[]): AnalysisRow[] {
+function parse_event_type(raw: string): EventType {
+    if (!is_event_type(raw)) {
+        throw `Invalid/unhandled event type: ${raw}`;
+    }
+    return raw;
+}
+
+function get_rows(row_jsons: unknown[]): AnalysisRow[] {
     const rows: AnalysisRow[] = [];
     for (const row_json of row_jsons) {
-        if (row_json.skipped_message_reason) {
+        // SAFETY: row_jsons elements are objects from the daemon's NDJSON analysis rows.
+        const row = row_json as RawAnalysisRow;
+        if (row.skipped_message_reason) {
             rows.push({
                 type: AnalysisRowType.Skipped,
-                reason: row_json.skipped_message_reason,
+                reason: row.skipped_message_reason,
             });
         }
-        const raw_events: any[] = row_json.events ?? [];
+        const raw_events = row.events ?? [];
         // Detect V3 (dense, each element has analyzer_index) vs V2 (sparse, nulls allowed).
         const first_non_null = raw_events.find((e) => e !== null);
-        const is_v3 = first_non_null !== undefined && first_non_null.analyzer_index !== undefined;
-        const events: Event[] = is_v3
-            ? raw_events.map((e: any) => ({
-                  event_type: parse_event_type(e.event_type),
-                  message: e.message,
-                  analyzer_index: e.analyzer_index,
-              }))
-            : raw_events
-                  .map((e: any, i: number): Event | null => {
-                      if (e === null) {
-                          return null;
-                      }
-                      return {
-                          event_type: parse_event_type(e.event_type),
-                          message: e.message,
-                          analyzer_index: i,
-                      };
-                  })
-                  .filter((e): e is Event => e !== null);
+        const is_v3 = first_non_null != null && first_non_null.analyzer_index !== undefined;
+        const events: Event[] = raw_events
+            .map((e, i): Event | null => {
+                if (e === null) {
+                    return null;
+                }
+                return {
+                    event_type: parse_event_type(e.event_type),
+                    message: e.message,
+                    analyzer_index: is_v3 ? (e.analyzer_index ?? i) : i,
+                };
+            })
+            .filter((e): e is Event => e !== null);
         if (events.length > 0) {
             rows.push({
                 type: AnalysisRowType.Analysis,
-                packet_timestamp: new Date(row_json.packet_timestamp),
+                packet_timestamp: new Date(row.packet_timestamp),
                 events,
             });
         }
