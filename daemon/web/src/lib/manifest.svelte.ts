@@ -99,6 +99,14 @@ export class ManifestEntry {
         return this.analysis_report.statistics.num_warnings;
     }
 
+    get_warnings_by_severity(): { low: number; medium: number; high: number } | undefined {
+        if (this.analysis_report === undefined || typeof this.analysis_report === 'string') {
+            return undefined;
+        }
+        const { num_low, num_medium, num_high } = this.analysis_report.statistics;
+        return { low: num_low, medium: num_medium, high: num_high };
+    }
+
     get_pcap_url(): string {
         return `/api/pcap/${this.name}.pcapng`;
     }
