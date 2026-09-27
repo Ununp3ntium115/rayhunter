@@ -182,7 +182,11 @@ pub fn update_ui(
     }
 
     let colorblind_mode = config.colorblind_mode;
-    let mut display_style = display_style_from_state(DisplayState::Recording, colorblind_mode);
+    // Start as Paused (white) so the display shows "not running" until the
+    // diag thread confirms recording has actually started. Without this,
+    // a failed DiagDevice init (e.g. modem offline in charging-only mode)
+    // leaves the screen green permanently.
+    let mut display_style = display_style_from_state(DisplayState::Paused, colorblind_mode);
 
     task_tracker.spawn(async move {
         // this feels wrong, is there a more rusty way to do this?
@@ -237,5 +241,9 @@ pub fn update_ui(
                 .await;
             tokio::time::sleep(Duration::from_millis(REFRESH_RATE)).await;
         }
+        // Clear to black so the charging BIOS doesn't fight a stale EFF logo.
+        let dims = fb.dimensions();
+        fb.write_buffer(vec![(0u8, 0u8, 0u8); (dims.height * dims.width) as usize])
+            .await;
     });
 }

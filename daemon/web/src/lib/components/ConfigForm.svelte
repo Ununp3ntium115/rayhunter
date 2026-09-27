@@ -14,6 +14,7 @@
         type WifiStatus,
         type WifiNetwork,
     } from '../utils.svelte';
+    import { request_browser_location } from '../browserGeolocation';
     import Modal from './Modal.svelte';
     import ExpandableInput from './ExpandableInput.svelte';
     import CheckboxField from './CheckboxField.svelte';
@@ -36,6 +37,9 @@
     let scanResults = $state<WifiNetwork[]>([]);
     let dnsServersInput = $state('');
     let gpsMode = $derived(config?.gps_mode);
+    let locating = $state(false);
+    let locationMessage = $state('');
+    let locationMessageType = $state<'success' | 'error' | 'warning' | null>(null);
 
     async function load_config() {
         try {
@@ -143,6 +147,43 @@
         }
     }
 
+    async function get_location() {
+        try {
+            locating = true;
+            locationMessage = '';
+            locationMessageType = null;
+
+            const result = await request_browser_location({
+                geolocation: navigator.geolocation,
+                isSecureContext: window.isSecureContext,
+            });
+
+            if (result.ok) {
+                if (config) {
+                    config.gps_fixed_latitude = result.latitude;
+                    config.gps_fixed_longitude = result.longitude;
+                }
+
+                if (result.stale) {
+                    locationMessage =
+                        'Location obtained but coordinates are older than 5 minutes. Consider refreshing.';
+                    locationMessageType = 'warning';
+                } else {
+                    locationMessage = 'Location obtained successfully.';
+                    locationMessageType = 'success';
+                }
+            } else {
+                locationMessage = result.message;
+                locationMessageType = 'error';
+            }
+        } catch (error) {
+            locationMessage = `${error}`;
+            locationMessageType = 'error';
+        } finally {
+            locating = false;
+        }
+    }
+
     $effect(() => {
         if (shown && !config) {
             load_config();
@@ -203,6 +244,13 @@
                         label="Colorblind Mode"
                         bind:checked={config.colorblind_mode}
                     />
+                    {#if config.device === 'orbic'}
+                        <CheckboxField
+                            id="keep_screen_on"
+                            label="Keep Screen On (Orbic only)"
+                            bind:checked={config.keep_screen_on}
+                        />
+                    {/if}
                 </div>
 
                 <FormField
@@ -654,6 +702,55 @@
                                 class="form-control w-full"
                             />
                         </FormField>
+
+                        <div>
+                            <button
+                                type="button"
+                                onclick={get_location}
+                                disabled={locating}
+                                class="bg-rayhunter-blue hover:bg-rayhunter-dark-blue disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-md flex flex-row gap-1 items-center"
+                            >
+                                {#if locating}
+                                    <div
+                                        class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
+                                    ></div>
+                                    Getting location...
+                                {:else}
+                                    <svg
+                                        class="w-4 h-4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M17.657 16.657L13.414 20.9a2 2 0 01-2.828 0l-4.243-4.243a8 8 0 1111.314 0z"
+                                        ></path>
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                                        ></path>
+                                    </svg>
+                                    Fill from Browser Location
+                                {/if}
+                            </button>
+                            {#if locationMessage}
+                                <div
+                                    class="mt-2 p-2 rounded-sm text-sm {locationMessageType ===
+                                    'error'
+                                        ? 'bg-red-100 text-red-700'
+                                        : locationMessageType === 'warning'
+                                          ? 'bg-amber-100 text-amber-700'
+                                          : 'bg-green-100 text-green-700'}"
+                                >
+                                    {locationMessage}
+                                </div>
+                            {/if}
+                        </div>
                     {/if}
                 </div>
 

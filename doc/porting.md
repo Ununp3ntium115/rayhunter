@@ -39,6 +39,50 @@ You can figure these things out before even buying the device:
 
 Once you have a root shell, check that `/dev/diag` exists for sure.
 
+## How Rayhunter works
+
+Before writing device-specific code, it helps to understand how the daemon operates:
+
+```text
+                       rayhunter-daemon
+┌──────────────────────────────────────────────────────────────┐
+│                                                              │
+│  /dev/diag ──► DiagReader ──► QmdlStore ──► Analyzers       │
+│                                   │              │           │
+│                                   ▼              ▼           │
+│                              recordings/    HeuristicHit     │
+│                               QMDL files      events         │
+│                                   │              │           │
+│                              AxumServer ◄─────────┘          │
+│                                /api/…                        │
+│                                   │                          │
+│               Display ◄───────────┘                          │
+│          (orbic / tplink / ...)                              │
+└──────────────────────────────────────────────────────────────┘
+        ▲                                     ▲
+ Device hardware                       Web browser UI
+ (buttons, LEDs)                        (daemon/web/)
+```
+
+**Startup sequence:**
+
+1. The daemon reads `config.toml` — the `device =` key selects the display driver and the `qmdl_store_path` directory for recordings.
+2. It opens `/dev/diag` and begins streaming raw QMDL packets.
+3. Each packet is appended to the active recording file in `qmdl_store_path/`.
+4. Analyzers (in `daemon/src/analysis/`) run on each packet and emit `HeuristicHit` events when they detect suspicious behavior.
+5. The display driver (selected by `device =`, registered in [`Device` enum in `lib/src/lib.rs`](https://github.com/EFForg/rayhunter/blob/main/lib/src/lib.rs)) reflects current status — green for clean, yellow/red on hits.
+6. An Axum HTTP server exposes `/api/` endpoints for the browser UI to retrieve recordings and analysis results.
+
+**Key files you will touch for a new device:**
+
+| File | What to do |
+|---|---|
+| `lib/src/lib.rs` — `Device` enum | Add your variant (e.g. `MyDevice`) — this is the value of `device =` in `config.toml` |
+| `daemon/src/display/mydevice.rs` | Write the display/LED driver (see `orbic.rs`, `uz801.rs` for examples) |
+| `installer/src/mydevice.rs` | Write the installer; implement `install()` using `DeviceConnection` helpers |
+| `installer/src/lib.rs` — `Command` enum | Add your subcommand and `UtilSubCommand` shell entry |
+| `installer-gui/src-tauri/src/modifiers.rs` | Add GUI metadata (`show_device_network_setup`, labels) |
+
 ## Installing Rayhunter manually
 
 The Rayhunter installation consists of just two components: the `rayhunter-daemon` binary, and the config file (`config.toml`).
@@ -92,3 +136,24 @@ The installer gets the daemon binary path from `env!("FILE_RAYHUNTER_DAEMON")`, 
 You must also add a shell utility subcommand under `installer util` (the `UtilSubCommand` enum in `installer/src/lib.rs`), e.g. `installer util tplink-shell`, `installer util orbic-shell`. This is required -- without it, users and developers have no way to interactively debug the device. Depending on connectivity, this might be a telnet session, an ADB shell, or a serial connection. Other utilities (file transfer helpers, etc.) are optional but encouraged. See the existing `UtilSubCommand` variants for examples.
 
 Please reuse existing utilities wherever possible. Take a look at [`installer/src/tplink.rs`](https://github.com/EFForg/rayhunter/blob/main/installer/src/tplink.rs) and [`installer/src/orbic_network.rs`](https://github.com/EFForg/rayhunter/blob/main/installer/src/orbic_network.rs) for inspiration. But the structures there are still evolving, and we'll happily guide you during code review.
+
+## New device checklist
+
+Use this as a tracking list when contributing support for a new device. Items toward the top are required; items lower down improve polish and are strongly encouraged.
+
+**Required:**
+- [ ] Hardware verified: root shell available and `/dev/diag` exists
+- [ ] `Device` variant added to `lib/src/lib.rs`
+- [ ] Display driver written in `daemon/src/display/mydevice.rs` (or an existing driver reused/shared)
+- [ ] Installer module written in `installer/src/mydevice.rs` using `DeviceConnection` helpers
+- [ ] Installer subcommand added to the `Command` enum in `installer/src/lib.rs`
+- [ ] `installer util mydevice-shell` subcommand added to `UtilSubCommand` (required for debugging)
+- [ ] `install_config()` called with the correct `device_type` string
+- [ ] Manual installation tested on hardware from scratch
+- [ ] Installer tested on hardware from scratch
+
+**Strongly encouraged:**
+- [ ] Autostart init script written (`dist/scripts/rayhunter_daemon` with `#RAYHUNTER-PRESTART` expansion)
+- [ ] Installer GUI metadata added in `installer-gui/src-tauri/src/modifiers.rs` (`show_device_network_setup`, labels, argument labels)
+- [ ] Proof-of-concept or investigation notes posted to [GitHub discussions](https://github.com/EFForg/rayhunter/discussions) before opening a PR
+- [ ] Device added to supported-devices page with region availability, purchase links, and known limitations

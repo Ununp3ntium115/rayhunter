@@ -1,6 +1,8 @@
 <script lang="ts">
     import { user_action_req } from '$lib/utils.svelte';
     import TrashIcon from './TrashIcon.svelte';
+    import Button from './Button.svelte';
+
     let {
         text,
         url,
@@ -20,11 +22,10 @@
     }
 </script>
 
-<button
-    class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-2 sm:px-4 rounded-md flex flex-row"
-    onclick={confirm_delete}
-    aria-label="delete"
->
-    <p>{text}</p>
-    <TrashIcon class="w-6 h-6 text-white" />
-</button>
+<Button variant="red" onclick={confirm_delete} aria-label="delete">
+    <!-- eslint-disable-next-line svelte/no-useless-children-snippet -->
+    {#snippet children()}
+        <p>{text}</p>
+        <TrashIcon class="w-6 h-6 text-white" />
+    {/snippet}
+</Button>

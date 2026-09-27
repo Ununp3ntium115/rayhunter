@@ -1,6 +1,9 @@
+use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
 use clap::Parser;
 use log::{debug, error, info, warn};
+use pcap_file_tokio::pcap::PcapReader;
+use pcap_file_tokio::pcapng::blocks::enhanced_packet::EnhancedPacketBlock;
 use pcap_file_tokio::pcapng::{Block, PcapNgReader};
 use rayhunter::{
     DeviceMetadata,
@@ -10,7 +13,10 @@ use rayhunter::{
     qmdl::QmdlMessageReader,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 use tokio::fs::File;
 use walkdir::WalkDir;
 
@@ -70,8 +76,7 @@ impl Report {
             *self.skipped_reasons.entry(reason).or_insert(0) += 1;
             self.skipped += 1;
         }
-        for maybe_event in row.events {
-            let Some(event) = maybe_event else { continue };
+        for event in row.events {
             let Some(timestamp) = row.packet_timestamp else {
                 continue;
             };
@@ -105,45 +110,26 @@ impl Report {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::DateTime;
-
-    #[test]
-    fn process_row_records_skip_reason_and_event() {
-        let mut report = Report::new("test");
-        report.process_row(AnalysisRow {
-            packet_timestamp: Some(
-                DateTime::parse_from_rfc3339("2025-01-01T00:00:00+00:00").unwrap(),
-            ),
-            skipped_message_reason: Some("parse error".to_string()),
-            events: vec![Some(Event {
-                event_type: EventType::Low,
-                message: "warning".to_string(),
-            })],
-        });
-
-        assert_eq!(report.skipped, 1);
-        assert_eq!(report.skipped_reasons["parse error"], 1);
-        assert_eq!(report.warnings, 1);
-        assert_eq!(report.events.len(), 1);
-    }
-}
-
 async fn analyze_pcap(
     pcap_path: &str,
     show_skipped: bool,
     json_writer: Option<&mut IncrementalJsonWriter<File>>,
-) {
+) -> Result<()> {
     let mut harness =
         Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
-    let pcap_file = &mut File::open(&pcap_path).await.expect("failed to open file");
+    let pcap_file = &mut File::open(pcap_path).await.context("failed to open file")?;
     let mut pcap_reader = PcapNgReader::new(pcap_file)
         .await
-        .expect("failed to read PCAP file");
+        .context("failed to read PCAP file")?;
     let mut report = Report::new(pcap_path);
-    while let Some(Ok(block)) = pcap_reader.next_block().await {
+    while let Some(block_result) = pcap_reader.next_block().await {
+        let block = match block_result {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("{pcap_path}: skipping packet: {e}");
+                continue;
+            }
+        };
         let row = match block {
             Block::EnhancedPacket(packet) => harness.analyze_pcap_packet(packet),
             other => {
@@ -158,26 +144,66 @@ async fn analyze_pcap(
         writer
             .write_report(&report)
             .await
-            .expect("failed to write report to JSON");
+            .context("failed to write report to JSON")?;
     }
+    Ok(())
+}
+
+async fn analyze_classic_pcap(
+    pcap_path: &str,
+    show_skipped: bool,
+    json_writer: Option<&mut IncrementalJsonWriter<File>>,
+) -> Result<()> {
+    let mut harness =
+        Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
+    let pcap_file = File::open(pcap_path).await.context("failed to open file")?;
+    let mut reader = PcapReader::new(pcap_file)
+        .await
+        .context("failed to read PCAP file")?;
+    let mut report = Report::new(pcap_path);
+    while let Some(pkt_result) = reader.next_packet().await {
+        let pkt = match pkt_result {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("{pcap_path}: skipping packet: {e}");
+                continue;
+            }
+        };
+        let block = EnhancedPacketBlock {
+            interface_id: 0,
+            timestamp: pkt.timestamp,
+            original_len: pkt.orig_len,
+            data: pkt.data,
+            options: vec![],
+        };
+        report.process_row(harness.analyze_pcap_packet(block));
+    }
+    report.print_summary(show_skipped);
+    if let Some(writer) = json_writer {
+        writer
+            .write_report(&report)
+            .await
+            .context("failed to write report to JSON")?;
+    }
+    Ok(())
 }
 
 async fn analyze_qmdl(
     qmdl_path: &str,
     show_skipped: bool,
     json_writer: Option<&mut IncrementalJsonWriter<File>>,
-) {
+) -> Result<()> {
     let mut harness =
         Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
-    let qmdl_file = &mut File::open(&qmdl_path).await.expect("failed to open file");
+    let qmdl_file = &mut File::open(qmdl_path).await.context("failed to open file")?;
     let mut qmdl_reader = QmdlMessageReader::new(qmdl_file)
         .await
-        .expect("failed to open QmdlReader");
+        .context("failed to open QmdlReader")?;
     let mut report = Report::new(qmdl_path);
     while let Some(maybe_message) = qmdl_reader
         .get_next_message()
         .await
-        .expect("failed to get message")
+        .context("failed to get message")?
     {
         report.process_row(harness.analyze_qmdl_message(maybe_message));
     }
@@ -186,8 +212,9 @@ async fn analyze_qmdl(
         writer
             .write_report(&report)
             .await
-            .expect("failed to write report to JSON");
+            .context("failed to write report to JSON")?;
     }
+    Ok(())
 }
 
 async fn pcapify(qmdl_path: &PathBuf) {
@@ -219,6 +246,16 @@ async fn pcapify(qmdl_path: &PathBuf) {
         }
     }
     info!("wrote pcap to {:?}", pcap_path);
+}
+
+/// Returns the path with .qmdl (and .gz) stripped, used to match a QMDL against its pcap export.
+fn qmdl_base_path(path: &Path) -> PathBuf {
+    let without_last = path.with_extension("");
+    if without_last.extension().is_some_and(|e| e == "qmdl") {
+        without_last.with_extension("") // recording.qmdl.gz → recording
+    } else {
+        without_last // recording.qmdl → recording
+    }
 }
 
 #[tokio::main]
@@ -260,25 +297,66 @@ async fn main() {
         );
     }
 
-    for maybe_entry in WalkDir::new(&args.path) {
-        let Ok(entry) = maybe_entry else {
-            error!("failed to open dir entry {maybe_entry:?}");
-            continue;
-        };
+    // Collect first so QMDLs and their exported pcaps can be deduped regardless of walk order.
+    let entries: Vec<_> = WalkDir::new(&args.path)
+        .into_iter()
+        .filter_map(|e| match e {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                error!("failed to open dir entry: {err}");
+                None
+            }
+        })
+        .collect();
+
+    // Pass 1: QMDLs — track each stem so their pcap exports can be skipped.
+    let mut analyzed_qmdl_stems: HashSet<PathBuf> = HashSet::new();
+    for entry in &entries {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let path = entry.path();
+        let path_str = path.to_string_lossy();
+        let path_str = path_str.as_ref();
+        if name_str.ends_with(".qmdl") || name_str.ends_with(".qmdl.gz") {
+            info!("**** Beginning analysis of {name_str}");
+            if let Err(e) = analyze_qmdl(path_str, args.show_skipped, json_writer.as_mut()).await {
+                error!("{path_str}: {e}");
+            }
+            analyzed_qmdl_stems.insert(qmdl_base_path(path));
+            if args.pcapify {
+                pcapify(&path.to_path_buf()).await;
+            }
+        }
+    }
+
+    // Pass 2: pcap files — skip those whose QMDL was already analyzed above.
+    for entry in &entries {
         let name = entry.file_name();
         let name_str = name.to_str().unwrap();
         let path = entry.path();
         let path_str = path.to_str().unwrap();
-        if name_str.ends_with(".qmdl") || name_str.ends_with(".qmdl.gz") {
-            info!("**** Beginning analysis of {name_str}");
-            analyze_qmdl(path_str, args.show_skipped, json_writer.as_mut()).await;
-            if args.pcapify {
-                pcapify(&path.to_path_buf()).await;
+        if name_str.ends_with(".pcapng") {
+            let stem = path.with_extension("");
+            if analyzed_qmdl_stems.contains(&stem) {
+                info!("**** Skipping {name_str} (QMDL already analyzed)");
+                continue;
             }
-        } else if name_str.ends_with(".pcap") || name_str.ends_with(".pcapng") {
-            // TODO: if we've already analyzed a QMDL, skip its corresponding pcap
             info!("**** Beginning analysis of {name_str}");
-            analyze_pcap(path_str, args.show_skipped, json_writer.as_mut()).await;
+            if let Err(e) = analyze_pcap(path_str, args.show_skipped, json_writer.as_mut()).await {
+                error!("{path_str}: {e}");
+            }
+        } else if name_str.ends_with(".pcap") {
+            let stem = path.with_extension("");
+            if analyzed_qmdl_stems.contains(&stem) {
+                info!("**** Skipping {name_str} (QMDL already analyzed)");
+                continue;
+            }
+            info!("**** Beginning analysis of {name_str}");
+            if let Err(e) =
+                analyze_classic_pcap(path_str, args.show_skipped, json_writer.as_mut()).await
+            {
+                error!("{path_str}: {e}");
+            }
         }
     }
 
@@ -289,5 +367,47 @@ async fn main() {
             .finish()
             .await
             .expect("failed to finish writing to JSON file");
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::DateTime;
+
+    #[test]
+    fn qmdl_base_path_strips_qmdl_extension() {
+        assert_eq!(
+            qmdl_base_path(Path::new("/data/recording.qmdl")),
+            PathBuf::from("/data/recording")
+        );
+    }
+
+    #[test]
+    fn qmdl_base_path_strips_qmdl_gz_extension() {
+        assert_eq!(
+            qmdl_base_path(Path::new("/data/recording.qmdl.gz")),
+            PathBuf::from("/data/recording")
+        );
+    }
+
+    #[test]
+    fn process_row_records_skip_reason_and_event() {
+        let mut report = Report::new("test");
+        report.process_row(AnalysisRow {
+            packet_timestamp: Some(
+                DateTime::parse_from_rfc3339("2025-01-01T00:00:00+00:00").unwrap(),
+            ),
+            skipped_message_reason: Some("parse error".to_string()),
+            events: vec![Event {
+                event_type: EventType::Low,
+                message: "warning".to_string(),
+                analyzer_index: 0,
+            }],
+        });
+
+        assert_eq!(report.skipped, 1);
+        assert_eq!(report.skipped_reasons["parse error"], 1);
+        assert_eq!(report.warnings, 1);
+        assert_eq!(report.events.len(), 1);
     }
 }

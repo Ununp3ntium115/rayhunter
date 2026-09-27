@@ -1,4 +1,5 @@
 use crate::WingtechArgs as Args;
+use crate::connection::{TelnetConnection, stop_daemon_for_upgrade};
 use crate::output::{print, println};
 use crate::util::{reboot_device, telnet_send_command, telnet_send_file};
 use aes::Aes128;
@@ -36,8 +37,8 @@ const KEY: &[u8] = b"abcdefghijklmn12";
 /// Returns password encrypted in AES128 ECB mode with the key b"abcdefghijklmn12",
 /// with Pkcs7 padding, encoded in base64.
 fn encrypt_password(password: &[u8]) -> Result<String> {
-    if password.len() > 16 {
-        bail!("Wingtech admin password must be at most 16 bytes");
+    if password.len() >= 16 {
+        bail!("Wingtech admin password must be at most 15 bytes");
     }
 
     let c = Aes128::new_from_slice(KEY)?;
@@ -98,17 +99,11 @@ async fn wingtech_run_install(admin_ip: String, admin_password: String) -> Resul
     telnet_send_command(addr, "mkdir -p /data/rayhunter", "exit code 0", true).await?;
     println!("ok");
 
-    telnet_send_file(
-        addr,
-        "/data/rayhunter/config.toml",
-        crate::CONFIG_TOML
-            .replace("#device = \"orbic\"", "device = \"wingtech\"")
-            .as_bytes(),
-        true,
-    )
-    .await?;
+    let config = crate::set_device_in_config("wingtech")?;
+    telnet_send_file(addr, "/data/rayhunter/config.toml", config.as_bytes(), true).await?;
 
     let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
+    stop_daemon_for_upgrade(&mut TelnetConnection::new(addr, true)).await;
     telnet_send_file(
         addr,
         "/data/rayhunter/rayhunter-daemon",
@@ -165,10 +160,22 @@ fn test_encrypt_password() {
 }
 
 #[test]
-fn test_encrypt_password_rejects_passwords_longer_than_block() {
+fn test_encrypt_password_rejects_passwords_too_long() {
+    // 17 bytes: too long
     let error = encrypt_password(b"12345678901234567").unwrap_err();
     assert_eq!(
         error.to_string(),
-        "Wingtech admin password must be at most 16 bytes"
+        "Wingtech admin password must be at most 15 bytes"
+    );
+}
+
+#[test]
+fn test_encrypt_password_rejects_passwords_exactly_16_bytes() {
+    // Exactly 16 bytes: also too long because PKCS7 padding
+    // on a full block requires a full block of padding bytes
+    let error = encrypt_password(b"1234567890123456").unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Wingtech admin password must be at most 15 bytes"
     );
 }

@@ -106,6 +106,9 @@ pub struct Config {
     pub dns_servers: Option<Vec<String>>,
     /// WebDAV upload configuration. The upload worker runs whenever `webdav.url` is non-empty.
     pub webdav: WebdavConfig,
+    /// Orbic-only: prevent the screen from blanking by re-enabling the backlight whenever it
+    /// goes to sleep. Has no effect on other devices.
+    pub keep_screen_on: bool,
 }
 
 /// Configuration for uploading finished QMDL recordings to a WebDAV server.
@@ -169,6 +172,7 @@ impl Default for Config {
             wifi_enabled: false,
             dns_servers: None,
             webdav: WebdavConfig::default(),
+            keep_screen_on: false,
         }
     }
 }

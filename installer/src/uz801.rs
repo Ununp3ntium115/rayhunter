@@ -103,7 +103,11 @@ async fn wait_for_adb() -> Result<ADBUSBDevice> {
 
     loop {
         if attempts >= MAX_ATTEMPTS {
-            anyhow::bail!("Timeout waiting for ADB connection after USB debug activation");
+            anyhow::bail!(
+                "Timeout waiting for ADB connection after USB debug activation.\n\
+                If you have `adb` installed, a running ADB daemon may be holding \
+                the device. Try running `adb kill-server` and then re-running the installer."
+            );
         }
 
         // UZ801 USB vendor and product IDs.
@@ -119,7 +123,11 @@ async fn wait_for_adb() -> Result<ADBUSBDevice> {
                 // Device not ready yet, continue waiting
             }
             Err(e) => {
-                anyhow::bail!("ADB connection error: {}", e);
+                anyhow::bail!(
+                    "ADB connection error: {}\n\
+                    If you have `adb` installed, try running `adb kill-server` first.",
+                    e
+                );
             }
         }
 
@@ -156,7 +164,7 @@ async fn install_rayhunter_files(adb_device: &mut ADBUSBDevice) -> Result<()> {
     )?;
 
     // Install config file
-    let config_content = crate::CONFIG_TOML.replace("#device = \"orbic\"", "device = \"uz801\"");
+    let config_content = crate::set_device_in_config("uz801")?;
     let mut config_data = config_content.as_bytes();
     adb_device.push(&mut config_data, &"/data/rayhunter/config.toml")?;
 

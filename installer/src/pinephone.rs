@@ -9,11 +9,11 @@ use nusb::Interface;
 use nusb::transfer::{Control, ControlType, Recipient, RequestBuffer};
 use tokio::time::sleep;
 
+use crate::RAYHUNTER_DAEMON_INIT;
 use crate::connection::DeviceConnection;
 use crate::orbic::test_rayhunter;
 use crate::output::{print, println};
 use crate::util::open_usb_device;
-use crate::{CONFIG_TOML, RAYHUNTER_DAEMON_INIT};
 
 const USB_VENDOR_ID: u16 = 0x2C7C;
 const USB_PRODUCT_ID: u16 = 0x125;
@@ -32,13 +32,9 @@ pub async fn install() -> Result<()> {
     let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
     adb.write_file("/data/rayhunter/rayhunter-daemon", rayhunter_daemon_bin)
         .await?;
-    adb.write_file(
-        "/data/rayhunter/config.toml",
-        CONFIG_TOML
-            .replace("#device = \"orbic\"", "device = \"pinephone\"")
-            .as_bytes(),
-    )
-    .await?;
+    let config = crate::set_device_in_config("pinephone")?;
+    adb.write_file("/data/rayhunter/config.toml", config.as_bytes())
+        .await?;
     adb.write_file(
         "/etc/init.d/rayhunter_daemon",
         RAYHUNTER_DAEMON_INIT.as_bytes(),
@@ -215,7 +211,15 @@ impl DeviceConnection for ADBUSBDevice {
     /// Validates the file sends successfully to /tmp before overwriting the destination.
     async fn write_file(&mut self, dest: &str, mut payload: &[u8]) -> Result<()> {
         print!("Sending file {dest} ... ");
-        let file_name = Path::new(dest)
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        let dest_path = Path::new(dest);
+        if dest_path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            bail!("Invalid input: {}", dest_path.display());
+        }
+        let file_name = dest_path
             .file_name()
             .ok_or_else(|| anyhow!("{dest} does not have a file name"))?
             .to_str()

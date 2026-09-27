@@ -114,7 +114,9 @@ impl DiagDevice {
         loop {
             match Self::try_new(configured_device).await {
                 Ok(device) => {
-                    info!("Diag device initialization succeeded after {num_retries} retries");
+                    if num_retries > 0 {
+                        info!("Diag device initialization succeeded after {num_retries} retries");
+                    }
                     return Ok(device);
                 }
                 Err(e) => {
@@ -124,7 +126,7 @@ impl DiagDevice {
                         return Err(e);
                     }
 
-                    info!(
+                    debug!(
                         "Diag device initialization failed {num_retries} times, retrying in {delay:?}: {e}"
                     );
                     sleep(delay).await;

@@ -9,7 +9,8 @@ use tokio::time::sleep;
 
 use crate::RAYHUNTER_DAEMON_INIT;
 use crate::connection::{
-    TelnetConnection, install_config, install_wifi_tools, setup_data_directory,
+    TelnetConnection, check_free_space, install_config, install_wifi_tools, setup_data_directory,
+    stop_daemon_for_upgrade,
 };
 use crate::orbic_auth::{LoginInfo, LoginRequest, LoginResponse, encode_password};
 use crate::output::{eprintln, print, println};
@@ -166,6 +167,7 @@ pub async fn install(
     admin_password: Option<String>,
     reset_config: bool,
     data_dir: Option<String>,
+    remount_root: bool,
 ) -> Result<()> {
     let Some(admin_password) = admin_password else {
         eprintln!(
@@ -190,7 +192,7 @@ pub async fn install(
     println!("done");
 
     let data_dir = data_dir.unwrap_or_else(|| "/data/rayhunter-data".to_string());
-    setup_rayhunter(&admin_ip, reset_config, &data_dir).await
+    setup_rayhunter(&admin_ip, reset_config, &data_dir, remount_root).await
 }
 
 async fn wait_for_telnet(admin_ip: &str) -> Result<()> {
@@ -214,21 +216,38 @@ async fn wait_for_telnet(admin_ip: &str) -> Result<()> {
     Ok(())
 }
 
-async fn setup_rayhunter(admin_ip: &str, reset_config: bool, data_dir: &str) -> Result<()> {
+pub(crate) async fn setup_rayhunter(
+    admin_ip: &str,
+    reset_config: bool,
+    data_dir: &str,
+    remount_root: bool,
+) -> Result<()> {
     let addr = SocketAddr::from_str(&format!("{admin_ip}:{TELNET_PORT}"))?;
     let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
 
-    // Remount filesystem as read-write to allow modifications
-    // This is really only necessary for the Moxee Hotspot
-    telnet_send_command(
-        addr,
-        "mount -o remount,rw /dev/ubi0_0 /",
-        "exit code 0",
-        false,
-    )
-    .await?;
-
+    // Orbic firmware already exposes the installation paths as writable. The
+    // remount is retained for Moxee, whose root filesystem requires it.
+    if remount_root {
+        telnet_send_command(
+            addr,
+            "mount -o remount,rw /dev/ubi0_0 /",
+            "exit code 0",
+            false,
+        )
+        .await?;
+    }
     let mut conn = TelnetConnection::new(addr, false);
+
+    // Stop any running daemon and remove the old binary before uploading the new one.
+    // On devices with tight partitions (e.g. Moxee) the running process holds the old
+    // inode open, so disk blocks aren't freed until the process exits.  Stopping first
+    // ensures only one copy of the binary needs to fit on the partition at a time,
+    // and must happen before the free-space check so the freed blocks are counted.
+    stop_daemon_for_upgrade(&mut conn).await;
+
+    let needed_kb = rayhunter_daemon_bin.len() as u64 / 1024 + 5 * 1024;
+    check_free_space(&mut conn, data_dir, needed_kb).await?;
+
     setup_data_directory(&mut conn, data_dir).await?;
 
     // Ensure bin and scripts directories exist under the data dir (via symlink)

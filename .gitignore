@@ -3,3 +3,5 @@
 .DS_Store
 /tools/build-wpa-supplicant
 /node_modules
+# machine-local CodeGraph index/daemon state
+/.codegraph

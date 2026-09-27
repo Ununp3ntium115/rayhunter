@@ -15,6 +15,8 @@ interface JsonManifestEntry {
     stop_reason: string | null;
     upload_time: string | null;
     gps_mode: GpsMode | null;
+    display_name: string | null;
+    notes: string | null;
 }
 
 export class Manifest {
@@ -64,6 +66,8 @@ export class ManifestEntry {
     public stop_reason: string | undefined = $state(undefined);
     public upload_time: Date | undefined = $state(undefined);
     public gps_mode: GpsMode | undefined = $state(undefined);
+    public display_name: string | null = $state(null);
+    public notes: string | null = $state(null);
 
     constructor(json: JsonManifestEntry) {
         this.name = json.name;
@@ -81,6 +85,8 @@ export class ManifestEntry {
         if (json.gps_mode !== null) {
             this.gps_mode = json.gps_mode;
         }
+        this.display_name = json.display_name ?? null;
+        this.notes = json.notes ?? null;
     }
 
     get_readable_qmdl_size(): string {
@@ -97,6 +103,14 @@ export class ManifestEntry {
             return undefined;
         }
         return this.analysis_report.statistics.num_warnings;
+    }
+
+    get_warnings_by_severity(): { low: number; medium: number; high: number } | undefined {
+        if (this.analysis_report === undefined || typeof this.analysis_report === 'string') {
+            return undefined;
+        }
+        const { num_low, num_medium, num_high } = this.analysis_report.statistics;
+        return { low: num_low, medium: num_medium, high: num_high };
     }
 
     get_pcap_url(): string {
@@ -121,5 +135,22 @@ export class ManifestEntry {
 
     get_reanalyze_url(): string {
         return `/api/analysis/${this.name}`;
+    }
+
+    get_label_url(): string {
+        return `/api/recording/${this.name}/label`;
+    }
+
+    async set_label(display_name: string | null, notes: string | null): Promise<void> {
+        const res = await fetch(this.get_label_url(), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ display_name, notes }),
+        });
+        if (!res.ok) {
+            throw new Error(await res.text());
+        }
+        this.display_name = display_name;
+        this.notes = notes;
     }
 }

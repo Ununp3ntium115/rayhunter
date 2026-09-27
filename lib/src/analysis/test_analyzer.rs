@@ -72,6 +72,7 @@ impl Analyzer for TestAnalyzer {
                     "SIB1 received CID: {}, TAC: {}, PLMN: {}-{}",
                     cid, tac, mcc_string, mnc_string
                 ),
+                analyzer_index: 0,
             });
         }
         None

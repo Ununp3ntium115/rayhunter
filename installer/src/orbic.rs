@@ -3,9 +3,9 @@ use std::io::stdin;
 
 use std::io::ErrorKind;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use adb_client::{ADBDeviceExt, ADBUSBDevice, RustADBError};
+use adb_client::{ADBDeviceExt, ADBUSBDevice, RustADBError, search_adb_devices};
 use anyhow::{Context, Result, anyhow, bail};
 use nusb::Interface;
 use nusb::transfer::{Control, ControlType, Recipient, RequestBuffer};
@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio::time::sleep;
 
 use crate::RAYHUNTER_DAEMON_INIT;
-use crate::connection::{DeviceConnection, install_config, install_wifi_tools};
+use crate::connection::{DeviceConnection, check_free_space, install_config, install_wifi_tools};
 use crate::output::{print, println};
 use crate::util::open_usb_device;
 
@@ -153,6 +153,14 @@ async fn setup_rootshell(adb_device: &mut ADBUSBDevice) -> Result<()> {
 async fn setup_rayhunter(mut adb_device: ADBUSBDevice, reset_config: bool) -> Result<ADBUSBDevice> {
     let rayhunter_daemon_bin = crate::get_file!("FILE_RAYHUNTER_DAEMON");
 
+    {
+        let mut conn = AdbConnection {
+            device: &mut adb_device,
+        };
+        let needed_kb = rayhunter_daemon_bin.len() as u64 / 1024 + 5 * 1024;
+        check_free_space(&mut conn, "/data", needed_kb).await?;
+    }
+
     adb_at_syscmd(
         &mut adb_device,
         "mkdir -p /data/rayhunter/scripts /data/rayhunter/bin",
@@ -244,7 +252,15 @@ async fn install_file_impl(
     dest: &str,
     mut payload: &[u8],
 ) -> Result<()> {
-    let file_name = Path::new(dest)
+    // Prevent path traversal attacks by rejecting paths containing '..'.
+    let dest_path = Path::new(dest);
+    if dest_path
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        bail!("Invalid input: {}", dest_path.display());
+    }
+    let file_name = dest_path
         .file_name()
         .ok_or_else(|| anyhow!("{dest} does not have a file name"))?
         .to_str()
@@ -263,9 +279,24 @@ async fn install_file_impl(
     if file_info.file_size == 0 {
         bail!("File transfer unsuccessful\nFile is empty");
     }
+    let expected_size = payload.len() as u32;
+    if file_info.file_size != expected_size {
+        // Size mismatch most often means /data was full: `mv` from /tmp
+        // silently left the old file in place on BusyBox when /data had no room.
+        bail!(
+            "File transfer unsuccessful\n\
+             Size mismatch at {dest}: expected {expected_size}B, found {}B\n\
+             Hint: the device's /data partition may be full. Free up space and re-run the installer.",
+            file_info.file_size
+        );
+    }
     let output = adb_command(adb_device, &["sha256sum", dest])?;
     if !output.contains(&file_hash) {
-        bail!("File transfer unsuccessful\nBad hash expected {file_hash} got {output}");
+        bail!(
+            "File transfer unsuccessful\n\
+             Bad hash at {dest}: expected {file_hash}, got {output}\n\
+             Hint: if the hashes differ consistently, the device filesystem may be corrupted or full."
+        );
     }
     Ok(())
 }
@@ -283,7 +314,26 @@ async fn get_adb() -> Result<ADBUSBDevice> {
     const MAX_FAILURES: u32 = 10;
     let mut failures = 0;
     loop {
-        match ADBUSBDevice::new(VENDOR_ID, PRODUCT_ID) {
+        // Tethering changes the Orbic USB composition and can expose ADB under
+        // a different product ID. Prefer the known product, then search for a
+        // single ADB interface and require the Orbic Qualcomm vendor before
+        // opening it. Do not use ADBUSBDevice::autodetect(), which can select
+        // an unrelated Android device.
+        let device = match ADBUSBDevice::new(VENDOR_ID, PRODUCT_ID) {
+            Err(RustADBError::DeviceNotFound(_)) => match search_adb_devices()? {
+                Some((vendor_id, product_id)) if is_orbic_usb_vendor(vendor_id) => {
+                    ADBUSBDevice::new(vendor_id, product_id)
+                }
+                Some((vendor_id, product_id)) => Err(RustADBError::DeviceNotFound(format!(
+                    "ADB device {vendor_id:04x}:{product_id:04x} is not an Orbic"
+                ))),
+                None => Err(RustADBError::DeviceNotFound(
+                    "cannot find an Orbic ADB interface".into(),
+                )),
+            },
+            result => result,
+        };
+        match device {
             Ok(dev) => match adb_echo_test(dev).await {
                 Ok(dev) => return Ok(dev),
                 Err(e) => {
@@ -303,12 +353,9 @@ async fn get_adb() -> Result<ADBUSBDevice> {
                 bail!(ORBIC_BUSY_MAC);
             }
             Err(RustADBError::DeviceNotFound(_)) => {
-                tokio::time::timeout(
-                    Duration::from_secs(30),
-                    wait_for_usb_device(VENDOR_ID, PRODUCT_ID),
-                )
-                .await
-                .context("Timeout waiting for Orbic to reconnect")??;
+                tokio::time::timeout(Duration::from_secs(30), wait_for_usb_device())
+                    .await
+                    .context("Timeout waiting for Orbic to reconnect")??;
             }
             Err(e) => {
                 if failures > MAX_FAILURES {
@@ -344,31 +391,12 @@ async fn adb_echo_test(mut adb_device: ADBUSBDevice) -> Result<ADBUSBDevice> {
     bail!("Could not communicate with the Orbic. Try disconnecting and reconnecting.");
 }
 
-#[cfg(not(target_os = "macos"))]
-async fn wait_for_usb_device(vendor_id: u16, product_id: u16) -> Result<()> {
-    use nusb::hotplug::HotplugEvent;
-    use tokio_stream::StreamExt;
+async fn wait_for_usb_device() -> Result<()> {
     loop {
-        let mut watcher = nusb::watch_devices()?;
-        while let Some(event) = watcher.next().await {
-            if let HotplugEvent::Connected(dev) = event
-                && dev.vendor_id() == vendor_id
-                && dev.product_id() == product_id
-            {
-                return Ok(());
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-/// `nusb::watch_devices` doesn't appear to work on macOS to poll instead.
-async fn wait_for_usb_device(vendor_id: u16, product_id: u16) -> Result<()> {
-    loop {
-        for device_info in nusb::list_devices()? {
-            if device_info.vendor_id() == vendor_id && device_info.product_id() == product_id {
-                return Ok(());
-            }
+        if let Some((vendor_id, _product_id)) = search_adb_devices()?
+            && is_orbic_usb_vendor(vendor_id)
+        {
+            return Ok(());
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -389,7 +417,6 @@ async fn adb_serial_cmd(adb_device: &mut ADBUSBDevice, command: &str) -> Result<
     data.push_str("\r\n");
 
     let timeout = Duration::from_secs(2);
-    let mut response = [0; 256];
 
     // Set up the serial port appropriately
     adb_device
@@ -403,27 +430,57 @@ async fn adb_serial_cmd(adb_device: &mut ADBUSBDevice, command: &str) -> Result<
         .usb_bulk_write(INTERFACE, 0x2, data.as_bytes(), timeout)
         .context("Failed to write command")?;
 
-    // Consume the echoed command
-    adb_device
-        .get_transport_mut()
-        .usb_bulk_read(INTERFACE, 0x82, &mut response, timeout)
-        .context("Failed to read submitted command")?;
+    // The Orbic may split the echoed command and final response across multiple USB packets.
+    // Read until a terminal modem response instead of assuming exactly one packet for each.
+    let deadline = Instant::now() + timeout;
+    let mut response = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!(
+                "Timed out waiting for response to {command}: {}",
+                String::from_utf8_lossy(&response)
+            );
+        }
 
-    // Read the actual response
-    adb_device
-        .get_transport_mut()
-        .usb_bulk_read(INTERFACE, 0x82, &mut response, timeout)
-        .context("Failed to read response")?;
+        let mut packet = [0; 256];
+        let bytes_read = adb_device
+            .get_transport_mut()
+            .usb_bulk_read(INTERFACE, 0x82, &mut packet, remaining)
+            .context("Failed to read response")?;
+        response.extend_from_slice(&packet[..bytes_read]);
 
-    // For some reason, on macOS the response buffer gets filled with garbage data that's
-    // rarely valid UTF-8. Luckily we only care about the first couple bytes, so just drop
-    // the garbage with `from_utf8_lossy` and look for our expected success string.
-    let responsestr = String::from_utf8_lossy(&response);
-    if !responsestr.contains("\r\nOK\r\n") {
-        bail!("Received unexpected response: {0}", responsestr);
+        match serial_response_status(&response) {
+            SerialResponseStatus::Pending => {}
+            SerialResponseStatus::Success => break,
+            SerialResponseStatus::Error => {
+                bail!(
+                    "Device rejected command {command}: {}",
+                    String::from_utf8_lossy(&response)
+                );
+            }
+        }
     }
 
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SerialResponseStatus {
+    Pending,
+    Success,
+    Error,
+}
+
+fn serial_response_status(response: &[u8]) -> SerialResponseStatus {
+    let response = String::from_utf8_lossy(response);
+    if response.contains("\r\nERROR\r\n") {
+        SerialResponseStatus::Error
+    } else if response.contains("\r\nOK\r\n") {
+        SerialResponseStatus::Success
+    } else {
+        SerialResponseStatus::Pending
+    }
 }
 
 /// Sends an AT command to the usb device over the serial port
@@ -457,26 +514,33 @@ pub async fn send_serial_cmd(interface: &Interface, command: &str) -> Result<()>
         .into_result()
         .context("Failed to write command")?;
 
-    // Consume the echoed command
-    tokio::time::timeout(timeout, interface.bulk_in(0x82, RequestBuffer::new(256)))
-        .await
-        .context("Timed out reading submitted command")?
-        .into_result()
-        .context("Failed to read submitted command")?;
-
-    // Read the actual response
-    let response = tokio::time::timeout(timeout, interface.bulk_in(0x82, RequestBuffer::new(256)))
-        .await
-        .context("Timed out reading response")?
-        .into_result()
-        .context("Failed to read response")?;
-
-    // For some reason, on macOS the response buffer gets filled with garbage data that's
-    // rarely valid UTF-8. Luckily we only care about the first couple bytes, so just drop
-    // the garbage with `from_utf8_lossy` and look for our expected success string.
-    let responsestr = String::from_utf8_lossy(&response);
-    if !responsestr.contains("\r\nOK\r\n") {
-        bail!("Received unexpected response: {0}", responsestr);
+    let deadline = Instant::now() + timeout;
+    let mut response = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!(
+                "Timed out waiting for response to {command}: {}",
+                String::from_utf8_lossy(&response)
+            );
+        }
+        let packet =
+            tokio::time::timeout(remaining, interface.bulk_in(0x82, RequestBuffer::new(256)))
+                .await
+                .context("Timed out reading response")?
+                .into_result()
+                .context("Failed to read response")?;
+        response.extend_from_slice(&packet);
+        match serial_response_status(&response) {
+            SerialResponseStatus::Pending => {}
+            SerialResponseStatus::Success => break,
+            SerialResponseStatus::Error => {
+                bail!(
+                    "Device rejected command {command}: {}",
+                    String::from_utf8_lossy(&response)
+                );
+            }
+        }
     }
 
     Ok(())
@@ -537,4 +601,48 @@ pub fn open_orbic() -> Result<Option<Interface>> {
     }
 
     Ok(None)
+}
+
+fn is_orbic_usb_vendor(vendor_id: u16) -> bool {
+    vendor_id == VENDOR_ID
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SerialResponseStatus, is_orbic_usb_vendor, serial_response_status};
+
+    #[test]
+    fn accepts_orbic_vendor_regardless_of_usb_product_mode() {
+        assert!(is_orbic_usb_vendor(0x05c6));
+    }
+
+    #[test]
+    fn rejects_unrelated_usb_vendors() {
+        assert!(!is_orbic_usb_vendor(0x18d1));
+    }
+
+    #[test]
+    fn fragmented_serial_response_is_pending_until_ok_marker_arrives() {
+        let mut response = Vec::from(&b"\r\nAT+SYSCMD=mv /tmp/rootshell /bin/rootshell\r\n"[..]);
+
+        assert_eq!(
+            serial_response_status(&response),
+            SerialResponseStatus::Pending
+        );
+
+        response.extend_from_slice(b"\r\nOK\r\n");
+
+        assert_eq!(
+            serial_response_status(&response),
+            SerialResponseStatus::Success
+        );
+    }
+
+    #[test]
+    fn serial_error_response_is_reported_as_error() {
+        assert_eq!(
+            serial_response_status(b"\r\nERROR\r\n"),
+            SerialResponseStatus::Error
+        );
+    }
 }

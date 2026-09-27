@@ -222,6 +222,7 @@ pub fn run_webdav_upload_worker(
 mod tests {
     use super::*;
     use crate::config::GpsMode;
+    use crate::qmdl_store::RecordingMetadata;
     use axum::{
         Router,
         body::Bytes,
@@ -290,7 +291,10 @@ mod tests {
         dir: &std::path::Path,
     ) -> (Arc<RwLock<RecordingStore>>, String) {
         let mut store = RecordingStore::create(dir).await.unwrap();
-        let (mut qmdl_file, mut analysis_file) = store.new_entry(GpsMode::Disabled).await.unwrap();
+        let (mut qmdl_file, mut analysis_file) = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         qmdl_file.write_all(b"fake qmdl payload").await.unwrap();
         qmdl_file.flush().await.unwrap();
         analysis_file

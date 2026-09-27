@@ -86,6 +86,12 @@ impl Display for FileKind {
     }
 }
 
+/// Metadata captured at recording start for versioning and device info
+#[derive(Debug, Clone, Default)]
+pub struct RecordingMetadata {
+    pub device_model: Option<String>,
+}
+
 pub struct RecordingStore {
     pub path: PathBuf,
     pub manifest: Manifest,
@@ -125,10 +131,20 @@ pub struct ManifestEntry {
     pub gps_mode: Option<GpsMode>,
     #[serde(default)]
     pub compressed: bool,
+    /// Schema version for device metadata (0 = pre-metadata, 1+ = has metadata_version/device_model)
+    #[serde(default)]
+    pub metadata_version: u32,
+    /// Device model name (e.g., "orbic", "tplink") when recording started
+    #[serde(default)]
+    pub device_model: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 impl ManifestEntry {
-    fn new(gps_mode: GpsMode) -> Self {
+    fn new(gps_mode: GpsMode, recording_metadata: RecordingMetadata) -> Self {
         let now = rayhunter::clock::get_adjusted_now();
         let metadata = RuntimeMetadata::new();
         ManifestEntry {
@@ -143,6 +159,10 @@ impl ManifestEntry {
             upload_time: None,
             gps_mode: Some(gps_mode),
             compressed: true,
+            metadata_version: 1,
+            device_model: recording_metadata.device_model,
+            display_name: None,
+            notes: None,
         }
     }
 
@@ -272,6 +292,10 @@ impl RecordingStore {
                 stop_reason: None,
                 upload_time: None,
                 gps_mode: None,
+                metadata_version: 0,
+                device_model: None,
+                display_name: None,
+                notes: None,
             });
         }
 
@@ -307,12 +331,13 @@ impl RecordingStore {
     pub async fn new_entry(
         &mut self,
         gps_mode: GpsMode,
+        recording_metadata: RecordingMetadata,
     ) -> Result<(File, File), RecordingStoreError> {
         // if we've already got an entry open, close it
         if self.current_entry.is_some() {
             self.close_current_entry().await?;
         }
-        let new_entry = ManifestEntry::new(gps_mode);
+        let new_entry = ManifestEntry::new(gps_mode, recording_metadata);
         let qmdl_filepath = new_entry.get_filepath(FileKind::Qmdl, &self.path);
         let qmdl_file = File::create(&qmdl_filepath)
             .await
@@ -467,6 +492,23 @@ impl RecordingStore {
         Ok(())
     }
 
+    pub async fn set_entry_label(
+        &mut self,
+        name: &str,
+        display_name: Option<String>,
+        notes: Option<String>,
+    ) -> Result<(), RecordingStoreError> {
+        let entry = self
+            .manifest
+            .entries
+            .iter_mut()
+            .find(|e| e.name == name)
+            .ok_or(RecordingStoreError::NoSuchEntryError)?;
+        entry.display_name = display_name;
+        entry.notes = notes;
+        self.write_manifest().await
+    }
+
     pub async fn mark_entry_as_uploaded(
         &mut self,
         name: &str,
@@ -584,7 +626,10 @@ mod tests {
     async fn test_creating_updating_and_closing_entries() {
         let dir = make_temp_dir();
         let mut store = RecordingStore::create(dir.path()).await.unwrap();
-        let _ = store.new_entry(GpsMode::Disabled).await.unwrap();
+        let _ = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         let entry_index = store.current_entry.unwrap();
         assert_eq!(
             RecordingStore::read_manifest(dir.path()).await.unwrap(),
@@ -618,7 +663,10 @@ mod tests {
     async fn test_create_on_existing_store() {
         let dir = make_temp_dir();
         let mut store = RecordingStore::create(dir.path()).await.unwrap();
-        let _ = store.new_entry(GpsMode::Disabled).await.unwrap();
+        let _ = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         store.update_current_entry_qmdl_size(1000).await.unwrap();
         let store = RecordingStore::create(dir.path()).await.unwrap();
         assert_eq!(store.manifest.entries.len(), 0);
@@ -628,9 +676,15 @@ mod tests {
     async fn test_repeated_new_entries() {
         let dir = make_temp_dir();
         let mut store = RecordingStore::create(dir.path()).await.unwrap();
-        let _ = store.new_entry(GpsMode::Disabled).await.unwrap();
+        let _ = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         let entry_index = store.current_entry.unwrap();
-        let _ = store.new_entry(GpsMode::Disabled).await.unwrap();
+        let _ = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         let new_entry_index = store.current_entry.unwrap();
         assert_ne!(entry_index, new_entry_index);
         assert_eq!(store.manifest.entries.len(), 2);
@@ -640,7 +694,10 @@ mod tests {
     async fn test_delete_all_entries() {
         let dir = make_temp_dir();
         let mut store = RecordingStore::create(dir.path()).await.unwrap();
-        let _ = store.new_entry(GpsMode::Disabled).await.unwrap();
+        let _ = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         assert!(store.current_entry.is_some());
 
         store.delete_all_entries().await.unwrap();
@@ -656,7 +713,10 @@ mod tests {
     async fn test_mark_entry_as_uploaded_sets_time_and_persists() {
         let dir = make_temp_dir();
         let mut store = RecordingStore::create(dir.path()).await.unwrap();
-        let _ = store.new_entry(GpsMode::Disabled).await.unwrap();
+        let _ = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         let name = store.manifest.entries[0].name.clone();
         store.close_current_entry().await.unwrap();
 
@@ -687,7 +747,10 @@ mod tests {
         let mut store = RecordingStore::create(dir.path()).await.unwrap();
 
         for _ in 0..3 {
-            let _ = store.new_entry(GpsMode::Disabled).await.unwrap();
+            let _ = store
+                .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+                .await
+                .unwrap();
         }
 
         store.manifest.entries[0].name = "entry-0".to_owned();
@@ -724,5 +787,197 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.get_next_unuploaded_entry(TimeDelta::seconds(3)), None);
+    }
+
+    #[tokio::test]
+    async fn test_old_schema_backward_compat() {
+        let dir = make_temp_dir();
+        let mut store = RecordingStore::create(dir.path()).await.unwrap();
+
+        // Create an entry to get the proper manifest format
+        let _ = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
+        store.close_current_entry().await.unwrap();
+        drop(store);
+
+        // Read the manifest and simulate old format by removing new fields
+        let manifest_path = dir.path().join("manifest.toml");
+        let manifest_str = tokio::fs::read_to_string(&manifest_path).await.unwrap();
+
+        // Remove the new fields to simulate an old manifest
+        let old_manifest = manifest_str
+            .lines()
+            .filter(|line| !line.contains("metadata_version") && !line.contains("device_model"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        tokio::fs::write(&manifest_path, old_manifest)
+            .await
+            .unwrap();
+
+        // Reload and verify it parses correctly with defaults
+        let loaded = RecordingStore::load(dir.path()).await.unwrap();
+        assert_eq!(loaded.manifest.entries.len(), 1);
+        let entry = &loaded.manifest.entries[0];
+        assert_eq!(entry.device_model, None);
+        assert_eq!(entry.metadata_version, 0);
+    }
+
+    #[tokio::test]
+    async fn test_unknown_device_model_forward_compat() {
+        let dir = make_temp_dir();
+        let mut store = RecordingStore::create(dir.path()).await.unwrap();
+
+        // Create an entry to get the proper manifest format
+        let metadata = RecordingMetadata {
+            device_model: Some("orbic".to_string()),
+        };
+        let _ = store.new_entry(GpsMode::Disabled, metadata).await.unwrap();
+        store.close_current_entry().await.unwrap();
+        drop(store);
+
+        // Read the manifest and replace device_model with future device
+        let manifest_path = dir.path().join("manifest.toml");
+        let manifest_str = tokio::fs::read_to_string(&manifest_path).await.unwrap();
+
+        // Replace the device_model value with a future unknown device
+        let future_manifest = manifest_str.replace(
+            "device_model = \"orbic\"",
+            "device_model = \"futuredevice\"",
+        );
+
+        tokio::fs::write(&manifest_path, future_manifest)
+            .await
+            .unwrap();
+
+        // Reload and verify it still parses correctly
+        let loaded = RecordingStore::load(dir.path()).await.unwrap();
+        assert_eq!(loaded.manifest.entries.len(), 1);
+        let entry = &loaded.manifest.entries[0];
+        assert_eq!(entry.device_model, Some("futuredevice".to_string()));
+        assert_eq!(entry.metadata_version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_restart_persists_metadata() {
+        let dir = make_temp_dir();
+        let mut store1 = RecordingStore::create(dir.path()).await.unwrap();
+
+        let metadata = RecordingMetadata {
+            device_model: Some("orbic".to_string()),
+        };
+        let _ = store1.new_entry(GpsMode::Disabled, metadata).await.unwrap();
+        let entry_name = store1.manifest.entries[0].name.clone();
+        let _ = store1.close_current_entry().await;
+        drop(store1);
+
+        // Reload from disk (simulating daemon restart)
+        let store2 = RecordingStore::load(dir.path()).await.unwrap();
+        assert_eq!(store2.manifest.entries.len(), 1);
+        assert_eq!(store2.manifest.entries[0].name, entry_name);
+        assert_eq!(
+            store2.manifest.entries[0].device_model,
+            Some("orbic".to_string())
+        );
+        assert_eq!(store2.manifest.entries[0].metadata_version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_missing_metadata_succeeds() {
+        let dir = make_temp_dir();
+        let mut store = RecordingStore::create(dir.path()).await.unwrap();
+
+        let metadata = RecordingMetadata::default();
+        let result = store.new_entry(GpsMode::Disabled, metadata).await;
+        assert!(result.is_ok());
+
+        let entry = &store.manifest.entries[0];
+        assert_eq!(entry.device_model, None);
+        assert_eq!(entry.metadata_version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_recording_metadata() {
+        let dir = make_temp_dir();
+        let mut store = RecordingStore::create(dir.path()).await.unwrap();
+
+        // Create multiple entries with different device models sequentially
+        let devices = vec!["orbic", "tplink", "uz801"];
+        for device in &devices {
+            let metadata = RecordingMetadata {
+                device_model: Some(device.to_string()),
+            };
+            let _ = store.new_entry(GpsMode::Disabled, metadata).await.unwrap();
+            store.close_current_entry().await.unwrap();
+        }
+
+        // Reload from disk to simulate concurrent persistence
+        let loaded_store = RecordingStore::load(dir.path()).await.unwrap();
+        assert_eq!(loaded_store.manifest.entries.len(), 3);
+
+        // Verify each entry has its device model persisted correctly
+        for (i, entry) in loaded_store.manifest.entries.iter().enumerate() {
+            assert_eq!(entry.device_model.as_deref(), Some(devices[i]));
+            assert_eq!(entry.metadata_version, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_recovery_sets_metadata_version_zero() {
+        let dir = make_temp_dir();
+        // Create a QMDL file without a manifest (pre-recovery scenario)
+        let qmdl_path = dir.path().join("1234567890.qmdl");
+        tokio::fs::write(&qmdl_path, b"fake qmdl data")
+            .await
+            .unwrap();
+
+        let store = RecordingStore::recover(dir.path()).await.unwrap();
+        assert_eq!(store.manifest.entries.len(), 1);
+        assert_eq!(store.manifest.entries[0].metadata_version, 0);
+        assert_eq!(store.manifest.entries[0].device_model, None);
+    }
+
+    #[tokio::test]
+    async fn test_export_redaction() {
+        let dir = make_temp_dir();
+        let mut store = RecordingStore::create(dir.path()).await.unwrap();
+
+        let metadata = RecordingMetadata {
+            device_model: Some("orbic".to_string()),
+        };
+        let _ = store.new_entry(GpsMode::Fixed, metadata).await.unwrap();
+
+        let entry = &store.manifest.entries[0];
+        let entry_json = serde_json::to_string(&entry).unwrap();
+        let entry_toml = toml::to_string(&entry).unwrap();
+
+        // Verify no sensitive fields are present
+        assert!(
+            !entry_json.contains("password"),
+            "entry JSON should not contain password"
+        );
+        assert!(
+            !entry_toml.contains("password"),
+            "entry TOML should not contain password"
+        );
+
+        // Verify safe fields are present
+        assert!(
+            entry_json.contains("device_model"),
+            "device_model should be in export"
+        );
+        assert!(
+            entry_json.contains("orbic"),
+            "device model name should be in export"
+        );
+        assert!(
+            entry_toml.contains("metadata_version"),
+            "metadata_version should be in export"
+        );
+
+        // Verify device_model is actually exported
+        assert_eq!(entry.device_model, Some("orbic".to_string()));
     }
 }

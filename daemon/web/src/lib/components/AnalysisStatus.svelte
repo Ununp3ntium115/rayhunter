@@ -23,7 +23,16 @@
             } else if (typeof entry.analysis_report === 'string') {
                 return entry.analysis_report;
             } else {
-                return `${entry.analysis_report.statistics.num_warnings} warnings`;
+                const { num_warnings } = entry.analysis_report.statistics;
+                if (num_warnings === 0) {
+                    return '0 warnings';
+                }
+                const sev = entry.get_warnings_by_severity()!;
+                const parts: string[] = [];
+                if (sev.high > 0) parts.push(`${sev.high}H`);
+                if (sev.medium > 0) parts.push(`${sev.medium}M`);
+                if (sev.low > 0) parts.push(`${sev.low}L`);
+                return parts.join(' · ');
             }
         } else {
             return 'Loading...';

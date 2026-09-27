@@ -8,6 +8,7 @@ start)
     # Below line may be replaced by the installer with device-specific startup commands, such as mounting the SD card.
     #RAYHUNTER-PRESTART
     start-stop-daemon -S -b --make-pidfile --pidfile /tmp/rayhunter.pid \
+    --exec /data/rayhunter/rayhunter-daemon \
     --startas /bin/sh -- -c "RUST_LOG=info exec /data/rayhunter/rayhunter-daemon /data/rayhunter/config.toml > /data/rayhunter/rayhunter.log 2>&1"
     echo "done"
     ;;

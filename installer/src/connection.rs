@@ -15,6 +15,75 @@ pub trait DeviceConnection {
     -> impl Future<Output = Result<()>> + Send;
 }
 
+/// Fails if the filesystem containing `path` has fewer than `needed_kb` kilobytes free.
+/// Silently succeeds when `df` output cannot be parsed; the subsequent push will report its
+/// own error if the device really is out of space.
+pub async fn check_free_space<C: DeviceConnection>(
+    conn: &mut C,
+    path: &str,
+    needed_kb: u64,
+) -> Result<()> {
+    // `tail -n 1` handles BusyBox `df` wrapping long filesystem names to a second line.
+    let output = conn
+        .run_command(&format!("df -k '{path}' 2>/dev/null | tail -n 1"))
+        .await?;
+    let Some(available_kb) = parse_df_available_kb(&output) else {
+        // df output is unparseable on this firmware; proceed and let the push fail on its own.
+        return Ok(());
+    };
+    if available_kb < needed_kb {
+        bail!(
+            "Not enough free space on the filesystem containing '{path}'.\n\
+             Need at least {} MB but only {} MB available.\n\
+             \n\
+             To free space, delete old recordings on the device:\n  \
+               rm -rf /data/rayhunter/qmdl/*",
+            needed_kb / 1024,
+            available_kb / 1024,
+        );
+    }
+    Ok(())
+}
+
+/// Parse the "Available" column from a `df -k` data line.
+///
+/// POSIX columns are `Filesystem 1K-blocks Used Available Use% Mountpoint`, but BusyBox
+/// wraps long filesystem names onto their own line, so the last line may lack the first
+/// column. Anchor on the `Use%` field instead: "Available" is always the field before it.
+fn parse_df_available_kb(output: &str) -> Option<u64> {
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let Some(pct_idx) = parts.iter().position(|p| p.ends_with('%')) else {
+            continue;
+        };
+        if pct_idx >= 1
+            && let Ok(kb) = parts[pct_idx - 1].parse::<u64>()
+        {
+            return Some(kb);
+        }
+    }
+    None
+}
+
+/// Stop a running rayhunter-daemon and remove its binary before an upgrade.
+///
+/// On devices with tight partitions (e.g. Moxee) the running daemon keeps the old
+/// binary's inode open, so the blocks aren't freed until the process exits.  Writing
+/// the new binary without stopping the daemon first therefore needs ~2× the binary
+/// size in free space — enough to overflow the partition.  Stopping first releases
+/// the inode and removes the old file so only one copy needs to fit at a time.
+///
+/// Both operations ignore errors: the daemon may not be running on a fresh install,
+/// and the binary may not exist yet.
+pub async fn stop_daemon_for_upgrade<C: DeviceConnection>(conn: &mut C) {
+    let _ = conn
+        .run_command("/etc/init.d/rayhunter_daemon stop 2>/dev/null; true")
+        .await;
+    let _ = conn
+        .run_command("rm -f /data/rayhunter/rayhunter-daemon 2>/dev/null; true")
+        .await;
+}
+
 /// Check if a file exists using a DeviceConnection
 pub async fn file_exists<C: DeviceConnection>(conn: &mut C, path: &str) -> bool {
     conn.run_command(&format!("test -f '{path}' && echo exists || echo missing"))
@@ -31,16 +100,31 @@ pub async fn install_config<C: DeviceConnection>(
     reset_config: bool,
 ) -> Result<()> {
     let config_path = "/data/rayhunter/config.toml";
-    if reset_config || !file_exists(conn, config_path).await {
-        let config = crate::CONFIG_TOML.replace(
-            r#"#device = "orbic""#,
-            &format!(r#"device = "{device_type}""#),
-        );
+    let needs_write = reset_config
+        || !file_exists(conn, config_path).await
+        || !config_has_device_key(conn, config_path).await;
+    if needs_write {
+        if !reset_config && file_exists(conn, config_path).await {
+            println!(
+                "Existing config is missing the 'device' setting (old installation); rewriting"
+            );
+        }
+        let config = crate::set_device_in_config(device_type)?;
         conn.write_file(config_path, config.as_bytes()).await?;
     } else {
         println!("Config file already exists, skipping (use --reset-config to overwrite)");
     }
     Ok(())
+}
+
+async fn config_has_device_key<C: DeviceConnection>(conn: &mut C, config_path: &str) -> bool {
+    conn.run_command(&format!(
+        // Anchored so the template's commented-out `#device = "orbic"` line doesn't count.
+        "grep -q '^[[:space:]]*device[[:space:]]*=' '{config_path}' 2>/dev/null && echo YES || echo NO"
+    ))
+    .await
+    .map(|out| out.contains("YES"))
+    .unwrap_or(true) // if check fails, assume config is valid to avoid spurious rewrites
 }
 
 /// Install wifi tools (wpa_supplicant, wpa_cli, iw) to /data/rayhunter/bin.
@@ -231,5 +315,35 @@ impl DeviceConnection for TelnetConnection {
 
     async fn write_file(&mut self, path: &str, content: &[u8]) -> Result<()> {
         crate::util::telnet_send_file(self.addr, path, content, self.wait_for_prompt).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_df_posix_output() {
+        let output = "/dev/block/xxx  512000  400000  112000  78% /data";
+        assert_eq!(parse_df_available_kb(output), Some(112000));
+    }
+
+    #[test]
+    fn parse_df_busybox_wrapped_filesystem_name() {
+        // BusyBox df wraps long names; tail -n 1 gives us only the numbers line.
+        let output = "                  204800     98304    106496  48% /data";
+        assert_eq!(parse_df_available_kb(output), Some(106496));
+        let output = "/dev/ubi0_0      204800   98304   106496  48% /data";
+        assert_eq!(parse_df_available_kb(output), Some(106496));
+    }
+
+    #[test]
+    fn parse_df_returns_none_for_garbage() {
+        assert_eq!(parse_df_available_kb("no numbers here"), None);
+        assert_eq!(parse_df_available_kb(""), None);
+        assert_eq!(
+            parse_df_available_kb("Filesystem 1K-blocks Used Available Use% Mounted on"),
+            None
+        );
     }
 }

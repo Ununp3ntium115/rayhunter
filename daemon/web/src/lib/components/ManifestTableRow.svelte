@@ -34,10 +34,65 @@
     function toggle_analysis_visibility() {
         analysis_visible = !analysis_visible;
     }
+
+    let editing = $state(false);
+    let draft_name = $state('');
+    let draft_notes = $state('');
 </script>
 
 <tr class="{status_row_color} drop-shadow-sm">
-    <td class="p-2">{entry.name}</td>
+    <td class="p-2">
+        {#if editing}
+            <div class="flex flex-col gap-1">
+                <input
+                    type="text"
+                    class="text-sm border rounded px-2 py-1"
+                    placeholder="Recording name…"
+                    maxlength="64"
+                    bind:value={draft_name}
+                />
+                <textarea
+                    class="text-sm border rounded px-2 py-1"
+                    placeholder="Notes…"
+                    maxlength="500"
+                    rows="2"
+                    bind:value={draft_notes}
+                ></textarea>
+                <div class="flex gap-1">
+                    <button
+                        class="text-xs border rounded px-2 py-1"
+                        onclick={async () => {
+                            try {
+                                await entry.set_label(
+                                    draft_name.trim() || null,
+                                    draft_notes.trim() || null
+                                );
+                                editing = false;
+                            } catch (err) {
+                                console.error(err);
+                            }
+                        }}>Save</button
+                    >
+                    <button
+                        class="text-xs border rounded px-2 py-1"
+                        onclick={() => {
+                            editing = false;
+                        }}>Cancel</button
+                    >
+                </div>
+            </div>
+        {:else}
+            {entry.display_name ?? entry.name}
+            <button
+                class="text-xs opacity-60 hover:opacity-100 ml-1"
+                onclick={() => {
+                    draft_name = entry.display_name ?? '';
+                    draft_notes = entry.notes ?? '';
+                    editing = true;
+                }}>✎</button
+            >
+        {/if}
+    </td>
     <td class="p-2">{date_formatter.format(entry.start_time)}</td>
     <td class="p-2"
         >{(entry.last_message_time && date_formatter.format(entry.last_message_time)) || 'N/A'}</td

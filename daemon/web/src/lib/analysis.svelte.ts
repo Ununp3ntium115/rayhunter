@@ -1,6 +1,19 @@
 import { parse_ndjson, type NewlineDeliminatedJson } from './ndjson';
 import { req } from './utils.svelte';
 
+// Raw JSON shapes received from the daemon's NDJSON analysis report format.
+type RawReportMetadata = {
+    analyzers: AnalyzerMetadata[];
+    rayhunter?: RayhunterMetadata;
+    report_version?: number;
+};
+type RawEvent = { event_type: string; message: string; analyzer_index?: number };
+type RawAnalysisRow = {
+    skipped_message_reason?: string;
+    events?: (RawEvent | null)[];
+    packet_timestamp: string;
+};
+
 export type AnalysisReport = {
     metadata: ReportMetadata;
     rows: AnalysisRow[];
@@ -11,6 +24,9 @@ export type ReportStatistics = {
     num_warnings: number;
     num_informational_logs: number;
     num_skipped_packets: number;
+    num_low: number;
+    num_medium: number;
+    num_high: number;
 };
 
 export class ReportMetadata {
@@ -18,10 +34,13 @@ export class ReportMetadata {
     public rayhunter: RayhunterMetadata;
     public report_version: number;
 
-    constructor(ndjson: any) {
-        this.analyzers = ndjson.analyzers;
-        this.rayhunter = ndjson.rayhunter;
-        this.report_version = ndjson.report_version || 2; // Default to v2
+    constructor(ndjson: unknown) {
+        // SAFETY: ndjson is report_json[0] from the daemon's NDJSON report — always the metadata line.
+        const raw = ndjson as RawReportMetadata;
+        this.analyzers = raw.analyzers;
+        // SAFETY: rayhunter field is always present in daemon NDJSON output.
+        this.rayhunter = raw.rayhunter as RayhunterMetadata;
+        this.report_version = raw.report_version ?? 2;
     }
 }
 
@@ -59,36 +78,51 @@ export type EventType = 'Informational' | 'Low' | 'Medium' | 'High';
 export type Event = {
     event_type: EventType;
     message: string;
-} | null;
+    analyzer_index: number;
+};
 
-function get_event(event_json: any): Event {
-    if (!['Informational', 'Low', 'Medium', 'High'].includes(event_json.event_type)) {
-        throw `Invalid/unhandled event type: ${event_json.event_type}`;
-    }
-
-    return event_json;
+function is_event_type(s: string): s is EventType {
+    return (['Informational', 'Low', 'Medium', 'High'] as const).some((t) => t === s);
 }
 
-function get_rows(row_jsons: any[]): AnalysisRow[] {
+function parse_event_type(raw: string): EventType {
+    if (!is_event_type(raw)) {
+        throw `Invalid/unhandled event type: ${raw}`;
+    }
+    return raw;
+}
+
+function get_rows(row_jsons: unknown[]): AnalysisRow[] {
     const rows: AnalysisRow[] = [];
     for (const row_json of row_jsons) {
-        if (row_json.skipped_message_reason) {
+        // SAFETY: row_jsons elements are objects from the daemon's NDJSON analysis rows.
+        const row = row_json as RawAnalysisRow;
+        if (row.skipped_message_reason) {
             rows.push({
                 type: AnalysisRowType.Skipped,
-                reason: row_json.skipped_message_reason,
+                reason: row.skipped_message_reason,
             });
         }
-        const events: Event[] = (row_json.events ?? []).map((event_json: any): Event | null => {
-            if (event_json === null) {
-                return null;
-            } else {
-                return get_event(event_json);
-            }
-        });
-        if (events.some((event) => event !== null)) {
+        const raw_events = row.events ?? [];
+        // Detect V3 (dense, each element has analyzer_index) vs V2 (sparse, nulls allowed).
+        const first_non_null = raw_events.find((e) => e !== null);
+        const is_v3 = first_non_null != null && first_non_null.analyzer_index !== undefined;
+        const events: Event[] = raw_events
+            .map((e, i): Event | null => {
+                if (e === null) {
+                    return null;
+                }
+                return {
+                    event_type: parse_event_type(e.event_type),
+                    message: e.message,
+                    analyzer_index: is_v3 ? (e.analyzer_index ?? i) : i,
+                };
+            })
+            .filter((e): e is Event => e !== null);
+        if (events.length > 0) {
             rows.push({
                 type: AnalysisRowType.Analysis,
-                packet_timestamp: new Date(row_json.packet_timestamp),
+                packet_timestamp: new Date(row.packet_timestamp),
                 events,
             });
         }
@@ -100,17 +134,21 @@ function get_report_stats(rows: AnalysisRow[]): ReportStatistics {
     let num_warnings = 0;
     let num_informational_logs = 0;
     let num_skipped_packets = 0;
+    let num_low = 0;
+    let num_medium = 0;
+    let num_high = 0;
     for (const row of rows) {
         if (row.type === AnalysisRowType.Skipped) {
             num_skipped_packets++;
         } else {
             for (const event of row.events) {
-                if (event !== null) {
-                    if (event.event_type === 'Informational') {
-                        num_informational_logs++;
-                    } else {
-                        num_warnings++;
-                    }
+                if (event.event_type === 'Informational') {
+                    num_informational_logs++;
+                } else {
+                    num_warnings++;
+                    if (event.event_type === 'Low') num_low++;
+                    else if (event.event_type === 'Medium') num_medium++;
+                    else if (event.event_type === 'High') num_high++;
                 }
             }
         }
@@ -119,6 +157,9 @@ function get_report_stats(rows: AnalysisRow[]): ReportStatistics {
         num_warnings,
         num_informational_logs,
         num_skipped_packets,
+        num_low,
+        num_medium,
+        num_high,
     };
 }
 

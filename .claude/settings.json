@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'f=\"$CLAUDE_TOOL_INPUT_FILE_PATH\"; if [[ \"$f\" == *.rs ]]; then cargo fmt --all --check 2>&1 | head -20; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'f=\"$CLAUDE_TOOL_INPUT_FILE_PATH\"; if [[ \"$f\" == *.svelte || (\"$f\" == */daemon/web/*.ts && \"$f\" != *.d.ts) ]]; then npm run check -w daemon/web 2>&1 | tail -20; fi'"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'if [[ \"$CLAUDE_TOOL_INPUT_FILE_PATH\" == *Cargo.lock ]]; then echo \"BLOCK: Do not edit Cargo.lock directly. Use: cargo update -p <crate> --precise <version>\"; exit 2; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -8,6 +8,7 @@
   - [Installing from source](./installing-from-source.md)
   - [Updating Rayhunter](./updating-rayhunter.md)
 - [Configuration](./configuration.md)
+  - [Browser Geolocation API and GPS Configuration](./browser-geolocation-api.md)
 - [Uninstalling](./uninstalling.md)
 - [Using Rayhunter](./using-rayhunter.md)
   - [Rayhunter's heuristics](./heuristics.md)
@@ -25,3 +26,5 @@
   - [PinePhone and PinePhone Pro](./pinephone.md)
   - [Moxee Hotspot](./moxee.md)
 - [REST API Documentation](./api-docs.md)
+- [Contributing]()
+  - [Adding a heuristic](./adding-a-heuristic.md)
