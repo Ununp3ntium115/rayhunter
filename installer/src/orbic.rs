@@ -5,7 +5,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::time::Duration;
 
-use adb_client::{ADBDeviceExt, ADBUSBDevice, RustADBError};
+use adb_client::{ADBDeviceExt, ADBUSBDevice, RustADBError, search_adb_devices};
 use anyhow::{Context, Result, anyhow, bail};
 use nusb::Interface;
 use nusb::transfer::{Control, ControlType, Recipient, RequestBuffer};
@@ -291,7 +291,26 @@ async fn get_adb() -> Result<ADBUSBDevice> {
     const MAX_FAILURES: u32 = 10;
     let mut failures = 0;
     loop {
-        match ADBUSBDevice::new(VENDOR_ID, PRODUCT_ID) {
+        // Tethering changes the Orbic USB composition and can expose ADB under
+        // a different product ID. Prefer the known product, then search for a
+        // single ADB interface and require the Orbic Qualcomm vendor before
+        // opening it. Do not use ADBUSBDevice::autodetect(), which can select
+        // an unrelated Android device.
+        let device = match ADBUSBDevice::new(VENDOR_ID, PRODUCT_ID) {
+            Err(RustADBError::DeviceNotFound(_)) => match search_adb_devices()? {
+                Some((vendor_id, product_id)) if is_orbic_usb_vendor(vendor_id) => {
+                    ADBUSBDevice::new(vendor_id, product_id)
+                }
+                Some((vendor_id, product_id)) => Err(RustADBError::DeviceNotFound(format!(
+                    "ADB device {vendor_id:04x}:{product_id:04x} is not an Orbic"
+                ))),
+                None => Err(RustADBError::DeviceNotFound(
+                    "cannot find an Orbic ADB interface".into(),
+                )),
+            },
+            result => result,
+        };
+        match device {
             Ok(dev) => match adb_echo_test(dev).await {
                 Ok(dev) => return Ok(dev),
                 Err(e) => {
@@ -311,12 +330,9 @@ async fn get_adb() -> Result<ADBUSBDevice> {
                 bail!(ORBIC_BUSY_MAC);
             }
             Err(RustADBError::DeviceNotFound(_)) => {
-                tokio::time::timeout(
-                    Duration::from_secs(30),
-                    wait_for_usb_device(VENDOR_ID, PRODUCT_ID),
-                )
-                .await
-                .context("Timeout waiting for Orbic to reconnect")??;
+                tokio::time::timeout(Duration::from_secs(30), wait_for_usb_device())
+                    .await
+                    .context("Timeout waiting for Orbic to reconnect")??;
             }
             Err(e) => {
                 if failures > MAX_FAILURES {
@@ -352,31 +368,12 @@ async fn adb_echo_test(mut adb_device: ADBUSBDevice) -> Result<ADBUSBDevice> {
     bail!("Could not communicate with the Orbic. Try disconnecting and reconnecting.");
 }
 
-#[cfg(not(target_os = "macos"))]
-async fn wait_for_usb_device(vendor_id: u16, product_id: u16) -> Result<()> {
-    use nusb::hotplug::HotplugEvent;
-    use tokio_stream::StreamExt;
+async fn wait_for_usb_device() -> Result<()> {
     loop {
-        let mut watcher = nusb::watch_devices()?;
-        while let Some(event) = watcher.next().await {
-            if let HotplugEvent::Connected(dev) = event
-                && dev.vendor_id() == vendor_id
-                && dev.product_id() == product_id
-            {
-                return Ok(());
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-/// `nusb::watch_devices` doesn't appear to work on macOS to poll instead.
-async fn wait_for_usb_device(vendor_id: u16, product_id: u16) -> Result<()> {
-    loop {
-        for device_info in nusb::list_devices()? {
-            if device_info.vendor_id() == vendor_id && device_info.product_id() == product_id {
-                return Ok(());
-            }
+        if let Some((vendor_id, _product_id)) = search_adb_devices()?
+            && is_orbic_usb_vendor(vendor_id)
+        {
+            return Ok(());
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -545,4 +542,23 @@ pub fn open_orbic() -> Result<Option<Interface>> {
     }
 
     Ok(None)
+}
+
+fn is_orbic_usb_vendor(vendor_id: u16) -> bool {
+    vendor_id == VENDOR_ID
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_orbic_usb_vendor;
+
+    #[test]
+    fn accepts_orbic_vendor_regardless_of_usb_product_mode() {
+        assert!(is_orbic_usb_vendor(0x05c6));
+    }
+
+    #[test]
+    fn rejects_unrelated_usb_vendors() {
+        assert!(!is_orbic_usb_vendor(0x18d1));
+    }
 }
