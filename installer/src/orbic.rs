@@ -1,9 +1,10 @@
 #[cfg(target_os = "windows")]
 use std::io::stdin;
 
-use std::io::ErrorKind;
-use std::path::Path;
-use std::time::{Duration, Instant};
+use std::fs;
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use adb_client::{ADBDeviceExt, ADBUSBDevice, RustADBError, search_adb_devices};
 use anyhow::{Context, Result, anyhow, bail};
@@ -99,6 +100,11 @@ pub async fn install(reset_config: bool) -> Result<()> {
     }
 
     let mut adb_device = force_debug_mode().await?;
+    print!("Backing up existing install... ");
+    match backup_existing_install(&mut adb_device)? {
+        Some(dir) => println!("saved to {}", dir.display()),
+        None => println!("nothing to back up"),
+    }
     print!("Installing rootshell... ");
     setup_rootshell(&mut adb_device).await?;
     println!("done");
@@ -148,6 +154,115 @@ async fn force_debug_mode() -> Result<ADBUSBDevice> {
     adb_command(&mut adb_device, &["pgrep", "atfwd_daemon"])?;
     println!("done");
     Ok(adb_device)
+}
+
+/// Files from an existing install that the installer overwrites.
+const BACKUP_FILES: &[&str] = &[
+    "/data/rayhunter/config.toml",
+    "/data/rayhunter/rayhunter-daemon",
+    "/etc/init.d/rayhunter_daemon",
+];
+
+/// Where backups go: a folder under the user's home directory, because the installer's own
+/// working directory can be read-only (for example when launched from a GUI app).
+fn backup_root() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join("rayhunter-backups"))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Saves the device's current copy of every file the installer overwrites into a new local
+/// directory, so a bad install can be undone by hand. Returns `None` on a device with no
+/// previous install. Fails before anything is pushed if an existing file cannot be saved
+/// and verified.
+fn backup_existing_install(adb_device: &mut ADBUSBDevice) -> Result<Option<PathBuf>> {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let dir = backup_root().join(format!("rayhunter-backup-{secs}"));
+    let mut dir_created = false;
+    for &remote in BACKUP_FILES {
+        let stat = adb_device
+            .stat(remote)
+            .with_context(|| format!("Failed to check for {remote} on the device"))?;
+        // A stat of a path that does not exist reports mode 0.
+        if stat.file_perm == 0 {
+            ensure_really_missing(adb_device, remote)?;
+            continue;
+        }
+        let mut contents = Vec::new();
+        adb_device
+            .pull(&remote, &mut contents)
+            .with_context(|| format!("Failed to back up {remote}; nothing was pushed"))?;
+        let listing = adb_command(adb_device, &["sha256sum", remote])?;
+        if !backup_matches(&contents, stat.file_size, &listing) {
+            bail!("Backup of {remote} did not match the device's copy; nothing was pushed");
+        }
+        let name = Path::new(remote)
+            .file_name()
+            .ok_or_else(|| anyhow!("{remote} does not have a file name"))?;
+        if !dir_created {
+            create_private_dir(&dir)
+                .with_context(|| format!("Failed to create backup folder {}", dir.display()))?;
+            dir_created = true;
+        }
+        write_private_file(&dir.join(name), &contents)
+            .with_context(|| format!("Failed to write backup of {remote} to {}", dir.display()))?;
+    }
+    Ok(dir_created.then(|| fs::canonicalize(&dir).unwrap_or(dir)))
+}
+
+/// adbd reports mode 0 for any failed stat, including a permission error, so an existing file
+/// could look missing. When an earlier install left /bin/rootshell, use root to confirm.
+fn ensure_really_missing(adb_device: &mut ADBUSBDevice, remote: &str) -> Result<()> {
+    if adb_device.stat("/bin/rootshell")?.file_perm == 0 {
+        return Ok(());
+    }
+    let output = adb_command(
+        adb_device,
+        &[
+            "/bin/rootshell",
+            "-c",
+            &format!("\"test -e {remote} && echo present\""),
+        ],
+    )?;
+    if output.contains("present") {
+        bail!("{remote} exists but could not be read over adb; nothing was pushed");
+    }
+    Ok(())
+}
+
+/// Backups can contain the device's saved WiFi and upload credentials, so keep them private.
+fn create_private_dir(dir: &Path) -> Result<()> {
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)?;
+    Ok(())
+}
+
+/// Refuses to overwrite an existing file.
+fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(contents)?;
+    Ok(())
+}
+
+/// True if `contents` is the file `sha256sum` reported on: same length and same hash.
+fn backup_matches(contents: &[u8], expected_size: u32, sha256sum_output: &str) -> bool {
+    contents.len() == expected_size as usize
+        && sha256sum_output.contains(&format!("{:x}", Sha256::digest(contents)))
 }
 
 async fn setup_rootshell(adb_device: &mut ADBUSBDevice) -> Result<()> {
@@ -624,6 +739,8 @@ fn is_orbic_usb_vendor(vendor_id: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn rootshell_command_single_quotes() {
         assert_eq!(
@@ -635,8 +752,6 @@ mod tests {
             r"'echo '\''a b'\'''"
         );
     }
-
-    use super::{SerialResponseStatus, is_orbic_usb_vendor, serial_response_status};
 
     #[test]
     fn accepts_orbic_vendor_regardless_of_usb_product_mode() {
@@ -671,5 +786,77 @@ mod tests {
             serial_response_status(b"\r\nERROR\r\n"),
             SerialResponseStatus::Error
         );
+    }
+
+    fn listing_for(contents: &[u8], path: &str) -> String {
+        format!("{:x}  {path}\n", Sha256::digest(contents))
+    }
+
+    #[test]
+    fn backup_matches_accepts_identical_copy() {
+        let data = b"[analyzers]\nnull_cipher = true\n";
+        let listing = listing_for(data, "/data/rayhunter/config.toml");
+        assert!(backup_matches(data, data.len() as u32, &listing));
+    }
+
+    #[test]
+    fn backup_matches_rejects_corrupted_content() {
+        let data = b"original";
+        let listing = listing_for(data, "/data/rayhunter/config.toml");
+        assert!(!backup_matches(b"0riginal", data.len() as u32, &listing));
+    }
+
+    #[test]
+    fn backup_matches_rejects_truncated_copy() {
+        let data = b"original contents";
+        let listing = listing_for(data, "/data/rayhunter/rayhunter-daemon");
+        // Even if the hash line were right, the size on the device must match too.
+        assert!(!backup_matches(&data[..4], data.len() as u32, &listing));
+    }
+
+    #[test]
+    fn backup_matches_rejects_empty_listing() {
+        assert!(!backup_matches(b"data", 4, ""));
+    }
+
+    fn temp_backup_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rayhunter-installer-test-{label}-{}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn private_backup_files_are_written_once_and_never_overwritten() {
+        let dir = temp_backup_dir("write");
+        let _ = fs::remove_dir_all(&dir);
+        create_private_dir(&dir).unwrap();
+        let file = dir.join("config.toml");
+        write_private_file(&file, b"secret = 1").unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"secret = 1");
+        assert!(write_private_file(&file, b"other").is_err());
+        assert_eq!(fs::read(&file).unwrap(), b"secret = 1");
+        assert!(create_private_dir(&dir).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_backup_paths_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_backup_dir("perms");
+        let _ = fs::remove_dir_all(&dir);
+        create_private_dir(&dir).unwrap();
+        let file = dir.join("config.toml");
+        write_private_file(&file, b"x").unwrap();
+        assert_eq!(
+            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

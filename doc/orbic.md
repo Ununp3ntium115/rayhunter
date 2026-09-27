@@ -59,6 +59,15 @@ To get started, follow the [release installation guide](./installing-from-releas
 ./installer orbic-usb
 ```
 
+Before it installs anything, `orbic-usb` copies the device's current
+`config.toml`, `rayhunter-daemon` and `rayhunter_daemon` init script into a new
+`rayhunter-backups/rayhunter-backup-<timestamp>` folder in your home directory
+and checks each copy against the device. If a file that exists on the device
+can't be saved, the installer stops before pushing anything. The backup is
+readable only by you, because `config.toml` can contain saved WiFi and upload
+passwords (on Windows it inherits your home folder's permissions). It is not
+restored automatically; keep it until you have confirmed the new install works.
+
 * The password is the one used to log in to the device's admin menu. You can reset the password by pressing the button under the back case until the unit restarts.
    * ***Note:*** If you have changed the device username, password, or IP address from their default values, these must be provided as arguments to the installer command above.
 * On Verizon Orbic, the default password is the WiFi password.
