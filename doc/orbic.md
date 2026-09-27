@@ -15,9 +15,7 @@ pay more than 30 USD for such a device (without shipping).
 
 | Frequency | Band          |
 | ------- | ------------------ |
-| 5G (wideband,midband,nationwide)  | n260/n261, n77, n2/5/48/66 |
 | 4G |    2/4/5/12/13/48/66       |
-| Global & Roaming | n257/n78     |
 | Wifi 2.4Ghz | b/g/n |
 | Wifi 5Ghz | a/ac/ax |
 | Wifi 6 | 🮱 |
