@@ -134,24 +134,45 @@ describe('Browser Geolocation Request', () => {
         }
     });
 
-    it('handles fallback timeout (Promise.race)', async () => {
-        // Never call either callback
-        getCurrentPositionSpy.mockImplementation(() => {
-            // Do nothing
+    it('relies on the geolocation timeout option, not a manual timer', async () => {
+        getCurrentPositionSpy.mockImplementation((_success: any, error: any) => {
+            error({ code: 3, message: 'Timeout' });
         });
 
-        const promise = request_browser_location({
+        await request_browser_location({
             geolocation: mockGeolocation,
             isSecureContext: true,
         });
 
-        // Fast-forward the timer past the timeout
-        vi.advanceTimersByTime(11000);
+        expect(getCurrentPositionSpy.mock.calls[0][2]).toMatchObject({ timeout: 10000 });
+        expect(vi.getTimerCount()).toBe(0);
+    });
 
-        const result = await promise;
+    it('includes error.message for unknown error codes', async () => {
+        getCurrentPositionSpy.mockImplementation((_success: any, error: any) => {
+            error({ code: 99, message: 'Weird platform failure' });
+        });
+
+        const result = await request_browser_location({
+            geolocation: mockGeolocation,
+            isSecureContext: true,
+        });
         expect(result.ok).toBe(false);
         if (!result.ok) {
-            expect(result.reason).toBe('timeout');
+            expect(result.reason).toBe('unavailable');
+            expect(result.message).toContain('Weird platform failure');
+        }
+    });
+
+    it('does not call geolocation when context is insecure', async () => {
+        const result = await request_browser_location({
+            geolocation: mockGeolocation,
+            isSecureContext: false,
+        });
+        expect(getCurrentPositionSpy).not.toHaveBeenCalled();
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+            expect(result.message).toMatch(/secure context/i);
         }
     });
 

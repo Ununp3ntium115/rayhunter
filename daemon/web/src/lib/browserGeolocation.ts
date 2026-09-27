@@ -75,19 +75,9 @@ export async function request_browser_location(deps: {
     const geolocation = deps.geolocation;
 
     return new Promise((resolve) => {
-        const timeoutHandle = setTimeout(() => {
-            resolve({
-                ok: false,
-                reason: 'timeout',
-                message:
-                    'Geolocation request timed out after 10 seconds. Check permissions and ensure location is available.',
-            });
-        }, 10000);
-
+        // The {timeout} option below is the only timeout mechanism; it fires the error callback with code 3.
         geolocation.getCurrentPosition(
             (position) => {
-                clearTimeout(timeoutHandle);
-
                 const { latitude, longitude } = position.coords;
                 const validationError = validate_coordinates(latitude, longitude);
 
@@ -114,8 +104,6 @@ export async function request_browser_location(deps: {
                 });
             },
             (error) => {
-                clearTimeout(timeoutHandle);
-
                 let reason:
                     | 'insecure_context'
                     | 'unsupported'
@@ -123,7 +111,9 @@ export async function request_browser_location(deps: {
                     | 'unavailable'
                     | 'timeout'
                     | 'invalid_coordinates' = 'unavailable';
-                let message: string = 'An unknown geolocation error occurred.';
+                let message: string = `An unknown geolocation error occurred${
+                    error.message ? `: ${error.message}` : '.'
+                }`;
 
                 // Use numeric codes (1, 2, 3) not class literals (not available in node env)
                 switch (error.code) {

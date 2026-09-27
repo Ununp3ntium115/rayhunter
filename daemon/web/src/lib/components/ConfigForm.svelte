@@ -38,6 +38,7 @@
     let dnsServersInput = $state('');
     let gpsMode = $derived(config?.gps_mode);
     let locating = $state(false);
+    const locationSupported = typeof window === 'undefined' || window.isSecureContext;
     let locationMessage = $state('');
     let locationMessageType = $state<'success' | 'error' | 'warning' | null>(null);
 
@@ -177,7 +178,8 @@
                 locationMessageType = 'error';
             }
         } catch (error) {
-            locationMessage = `${error}`;
+            console.error('Failed to get browser location', error);
+            locationMessage = `Could not get browser location: ${error instanceof Error ? error.message : String(error)}`;
             locationMessageType = 'error';
         } finally {
             locating = false;
@@ -713,7 +715,7 @@
                             <button
                                 type="button"
                                 onclick={get_location}
-                                disabled={locating}
+                                disabled={locating || !locationSupported}
                                 class="bg-rayhunter-blue hover:bg-rayhunter-dark-blue disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-md flex flex-row gap-1 items-center"
                             >
                                 {#if locating}
@@ -744,6 +746,15 @@
                                     Fill from Browser Location
                                 {/if}
                             </button>
+                            {#if !locationSupported}
+                                <div
+                                    class="mt-2 p-2 rounded-sm text-sm bg-amber-100 text-amber-700"
+                                >
+                                    Browser location needs HTTPS or localhost, and this page is
+                                    served over plain HTTP. Enter coordinates manually, or see
+                                    doc/browser-geolocation-api.md.
+                                </div>
+                            {/if}
                             {#if locationMessage}
                                 <div
                                     class="mt-2 p-2 rounded-sm text-sm {locationMessageType ===
