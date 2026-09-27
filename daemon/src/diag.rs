@@ -32,7 +32,7 @@ use crate::analysis::{AnalysisCtrlMessage, AnalysisWriter};
 use crate::config::GpsMode;
 use crate::display;
 use crate::notifications::{Notification, NotificationType};
-use crate::qmdl_store::{FileKind, RecordingStore, RecordingStoreError};
+use crate::qmdl_store::{FileKind, RecordingMetadata, RecordingStore, RecordingStoreError};
 use crate::server::ServerState;
 use crate::stats::DiskStats;
 
@@ -162,7 +162,13 @@ impl DiagTask {
             DiskSpaceCheck::Failed => {}
         }
 
-        let (qmdl_gz_file, analysis_file) = qmdl_store.new_entry(self.gps_mode).await?;
+        let device_model = format!("{:?}", self.device).to_lowercase();
+        let recording_metadata = RecordingMetadata {
+            device_model: Some(device_model),
+        };
+        let (qmdl_gz_file, analysis_file) = qmdl_store
+            .new_entry(self.gps_mode, recording_metadata)
+            .await?;
 
         // For fixed-mode sessions, write the configured coordinates to the storage
         // immediately so the per-session GPS is stored durably and isn't affected

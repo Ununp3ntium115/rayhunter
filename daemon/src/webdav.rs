@@ -11,7 +11,7 @@ use tokio_util::io::ReaderStream;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::config::WebdavConfig;
-use crate::qmdl_store::{FileKind, RecordingStore};
+use crate::qmdl_store::{FileKind, RecordingMetadata, RecordingStore};
 
 pub struct WebdavUploadWorkerConfig {
     poll_interval: Duration,
@@ -290,7 +290,10 @@ mod tests {
         dir: &std::path::Path,
     ) -> (Arc<RwLock<RecordingStore>>, String) {
         let mut store = RecordingStore::create(dir).await.unwrap();
-        let (mut qmdl_file, mut analysis_file) = store.new_entry(GpsMode::Disabled).await.unwrap();
+        let (mut qmdl_file, mut analysis_file) = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         qmdl_file.write_all(b"fake qmdl payload").await.unwrap();
         qmdl_file.flush().await.unwrap();
         analysis_file

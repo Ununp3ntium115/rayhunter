@@ -34,7 +34,7 @@ use crate::display::DisplayState;
 use crate::gps::GpsData;
 use crate::notifications::DEFAULT_NOTIFICATION_TIMEOUT;
 use crate::pcap::{generate_pcap_data, load_gps_records_for_entry};
-use crate::qmdl_store::{FileKind, RecordingStore};
+use crate::qmdl_store::{FileKind, RecordingMetadata, RecordingStore};
 use crate::update::UpdateStatus;
 
 pub struct ServerState {
@@ -719,8 +719,10 @@ mod tests {
     ) -> String {
         let entry_name = {
             let mut store = store_lock.write().await;
-            let (mut qmdl_gz_file, _analysis_file) =
-                store.new_entry(GpsMode::Disabled).await.unwrap();
+            let (mut qmdl_gz_file, _analysis_file) = store
+                .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+                .await
+                .unwrap();
 
             let mut writer = QmdlWriter::new(&mut qmdl_gz_file);
             writer.write_container(test_data).await.unwrap();
