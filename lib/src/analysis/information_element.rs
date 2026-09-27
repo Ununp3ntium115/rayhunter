@@ -111,9 +111,60 @@ impl TryFrom<&GsmtapMessage> for InformationElement {
                     LteInformationElement::NAS(msg),
                 )))
             }
+            GsmtapType::UmtsRrc(_) | GsmtapType::UmtsRlcMac => Ok(InformationElement::UMTS),
+            GsmtapType::Um(_) => Ok(InformationElement::GSM),
             _ => Err(InformationElementError::UnsupportedGsmtapType(
                 gsmtap_msg.header.gsmtap_type,
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gsmtap::{GsmtapHeader, GsmtapMessage, GsmtapType, UmSubtype, UmtsRrcSubtype};
+
+    fn make_msg(gsmtap_type: GsmtapType) -> GsmtapMessage {
+        GsmtapMessage {
+            header: GsmtapHeader::new(gsmtap_type),
+            payload: vec![],
+        }
+    }
+
+    #[test]
+    fn test_umts_rrc_yields_umts_ie() {
+        let msg = make_msg(GsmtapType::UmtsRrc(UmtsRrcSubtype::DlDcch));
+        assert!(matches!(
+            InformationElement::try_from(&msg),
+            Ok(InformationElement::UMTS)
+        ));
+    }
+
+    #[test]
+    fn test_umts_rlc_mac_yields_umts_ie() {
+        let msg = make_msg(GsmtapType::UmtsRlcMac);
+        assert!(matches!(
+            InformationElement::try_from(&msg),
+            Ok(InformationElement::UMTS)
+        ));
+    }
+
+    #[test]
+    fn test_um_bcch_yields_gsm_ie() {
+        let msg = make_msg(GsmtapType::Um(UmSubtype::Bcch));
+        assert!(matches!(
+            InformationElement::try_from(&msg),
+            Ok(InformationElement::GSM)
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_type_yields_error() {
+        let msg = make_msg(GsmtapType::QcDiag);
+        assert!(matches!(
+            InformationElement::try_from(&msg),
+            Err(InformationElementError::UnsupportedGsmtapType(_))
+        ));
     }
 }
