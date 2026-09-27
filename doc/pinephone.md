@@ -87,6 +87,18 @@ ModemManager never completes its QMI probe (`port cdc-wdm0 timed out N consecuti
 `modem couldn't be initialized: Failed to load current capabilities`), and the phone loses mobile
 data entirely until the modem is left alone long enough to finish booting.
 
+## Known limitation: Empty PCAPs with 2G/3G signaling
+
+The Quectel EG25-G modem emits 2G/3G signaling messages that Rayhunter does not currently parse or capture to PCAP. When these messages are logged, Rayhunter skips them with an error:
+
+```text
+ERROR rayhunter::gsmtap_parser] gsmtap_sink: ignoring unhandled log type: GsmRrSignallingMessage
+```
+
+This results in empty PCAP files being downloaded. This is expected behavior; Rayhunter's focus is LTE (4G) signaling. Future versions may add support for capturing these messages, but currently they are not saved.
+
+If you see this behavior on other supported devices, file a [GitHub issue](https://github.com/EFForg/rayhunter/issues).
+
 ## `Resource busy` when enabling adb
 
 On distributions where ModemManager (or another modem daemon such as `eg25-manager`) manages the

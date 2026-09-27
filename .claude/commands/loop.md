@@ -1,0 +1,12 @@
+# `/loop` — Rayhunter exhaustive issue drain
+
+Run only from the Rayhunter repository. Read `CONTRIBUTING.md`, `.hermes/context/rayhunter-ai-contribution-policy.md`, `.hermes/context/rayhunter-collaborative-issue-feature-drain-prompt.md`, and `.hermes/context/rayhunter-exhaustive-loop-prompt.md` completely, then execute exactly one state-aware control cycle. The collaborative prompt adds the fork PR/branch/security/TODO inventory; the exhaustive prompt is the complete upstream issue-to-card queue. Never post AI-generated public comments or submit a PR with an incomplete applicable checklist.
+
+1. Verify repository identity and explicit board `rayhunter-orbic`; if cwd, board, or bridge context is Claw/Velociraptor, HOLD.
+2. Read all repo-local `.hermes/context/` files, current `CLAUDE.md` if present, latest Claude bridge messages/outbox, the live upstream GitHub issue inventory, and the fork PR/branch inventory.
+3. Reconcile the 71 child cards, blocked parent, every upstream issue lane, every fork PR and non-default branch, three reviewed branch lanes, source TODO/FIXME maintenance lane, missing mappings, current branch, dirty/untracked paths, and active Claude processes.
+4. Write a durable START record under `.hermes/evidence/loop/<run-id>/` only if that directory is already an authorized coordination location; otherwise use the bridge evidence directory. Never overwrite prior evidence.
+5. If an explicit card/file lease exists, dispatch or continue exactly one bounded unit using the canonical prompt. If none exists, produce the exhaustive disposition and proposed next 3–5 units; do not self-unblock or mutate source.
+6. Independently verify any receipt, Git state, tests, staged files, and board readback. Stage only explicitly authorized files for the maintainer's commit; never commit or push unless the directive says so. Public commits and pull requests must be authored by `ununp3ntum115` and nobody else; do not add AI/automation co-authors or trailers. Any proposed commit subject must describe the actual diff without mentioning AI or claiming unrun tests.
+
+Output: live identity, board counts, current worker/lease, changed paths, action taken, evidence paths, blockers, and one next action. No release-readiness claim.

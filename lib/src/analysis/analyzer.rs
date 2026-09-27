@@ -6,17 +6,22 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::DeviceMetadata;
+use crate::diag::diaglog::LogBody;
 use crate::diag::{DiagParsingError, Message, MessagesContainer};
 use crate::gsmtap::{GsmtapHeader, GsmtapMessage, GsmtapType, parser as gsmtap_parser};
 use crate::util::RuntimeMetadata;
 
 use super::{
     connection_redirect_downgrade::ConnectionRedirect2GDowngradeAnalyzer,
-    diagnostic::DiagnosticAnalyzer, imsi_requested::ImsiRequestedAnalyzer,
-    incomplete_sib::IncompleteSibAnalyzer, information_element::InformationElement,
+    connection_release_storm::ConnectionReleaseStormAnalyzer, diagnostic::DiagnosticAnalyzer,
+    imsi_requested::ImsiRequestedAnalyzer, incomplete_sib::IncompleteSibAnalyzer,
+    information_element::InformationElement, lpp_positioning::LppPositioningAnalyzer,
+    measurement_report_profiling::MeasurementReportProfilingAnalyzer,
     nas_null_cipher::NasNullCipherAnalyzer, no_nas_messages::NoNasMessagesAnalyzer,
-    null_cipher::NullCipherAnalyzer, priority_2g_downgrade::LteSib6And7DowngradeAnalyzer,
-    test_analyzer::TestAnalyzer,
+    null_cipher::NullCipherAnalyzer, paging_storm::PagingStormAnalyzer,
+    priority_2g_downgrade::LteSib6And7DowngradeAnalyzer,
+    rrc_connection_setup::RapidConnectionSetupAnalyzer, test_analyzer::TestAnalyzer,
+    timing_advance::TimingAdvanceAnalyzer,
 };
 
 fn boxed(analyzer: impl Analyzer + Send + 'static) -> Box<dyn Analyzer + Send> {
@@ -56,6 +61,30 @@ fn all_analyzers(
             boxed(NoNasMessagesAnalyzer::new()),
         ),
         (DiagnosticAnalyzer::metadata(), boxed(DiagnosticAnalyzer {})),
+        (
+            TimingAdvanceAnalyzer::metadata(),
+            boxed(TimingAdvanceAnalyzer::new()),
+        ),
+        (
+            LppPositioningAnalyzer::metadata(),
+            boxed(LppPositioningAnalyzer::new()),
+        ),
+        (
+            PagingStormAnalyzer::metadata(),
+            boxed(PagingStormAnalyzer::new()),
+        ),
+        (
+            RapidConnectionSetupAnalyzer::metadata(),
+            boxed(RapidConnectionSetupAnalyzer::new()),
+        ),
+        (
+            ConnectionReleaseStormAnalyzer::metadata(),
+            boxed(ConnectionReleaseStormAnalyzer::new()),
+        ),
+        (
+            MeasurementReportProfilingAnalyzer::metadata(),
+            boxed(MeasurementReportProfilingAnalyzer::new()),
+        ),
     ]
     .into_iter()
 }
@@ -115,7 +144,7 @@ pub fn get_analyzers_metadata() -> Vec<AnalyzerMetadata> {
         .collect()
 }
 
-pub const REPORT_VERSION: u32 = 2;
+pub const REPORT_VERSION: u32 = 3;
 
 /// The severity level of an event.
 ///
@@ -178,6 +207,8 @@ impl<'de> Deserialize<'de> for EventType {
 pub struct Event {
     pub event_type: EventType,
     pub message: String,
+    /// Index into [Harness::analyzers]; set by the Harness, analyzers leave it 0.
+    pub analyzer_index: usize,
 }
 
 /// An [Analyzer] represents one type of heuristic for detecting an IMSI Catcher
@@ -303,7 +334,7 @@ impl AnalysisLineNormalizer {
 pub struct AnalysisRow {
     pub packet_timestamp: Option<DateTime<FixedOffset>>,
     pub skipped_message_reason: Option<String>,
-    pub events: Vec<Option<Event>>,
+    pub events: Vec<Event>,
 }
 
 impl AnalysisRow {
@@ -322,7 +353,6 @@ impl AnalysisRow {
     pub fn get_max_event_type(&self) -> EventType {
         self.events
             .iter()
-            .flatten()
             .map(|event| event.event_type)
             .max()
             .unwrap_or(EventType::Informational)
@@ -336,10 +366,17 @@ impl<'de> Deserialize<'de> for AnalysisRow {
     {
         use serde::de::Error;
 
+        // Legacy event format without analyzer_index; used by V1/V2 deserialization.
+        #[derive(Deserialize, Clone)]
+        struct LegacyEvent {
+            event_type: EventType,
+            message: String,
+        }
+
         #[derive(Deserialize)]
         struct V1AnalysisEntry {
             timestamp: DateTime<FixedOffset>,
-            events: Vec<Option<Event>>,
+            events: Vec<Option<LegacyEvent>>,
         }
 
         #[derive(Deserialize)]
@@ -353,14 +390,39 @@ impl<'de> Deserialize<'de> for AnalysisRow {
         struct V2Format {
             packet_timestamp: Option<DateTime<FixedOffset>>,
             skipped_message_reason: Option<String>,
-            events: Vec<Option<Event>>,
+            events: Vec<Option<LegacyEvent>>,
+        }
+
+        // V3 is the current format: dense Vec<Event> each carrying analyzer_index.
+        // Must be tried before V2 because serde ignores unknown fields by default —
+        // V2 would silently succeed on V3 rows and assign wrong positional indices.
+        #[derive(Deserialize)]
+        struct V3Format {
+            packet_timestamp: Option<DateTime<FixedOffset>>,
+            skipped_message_reason: Option<String>,
+            events: Vec<Event>,
         }
 
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum RowFormat {
             V1(V1Format),
+            V3(V3Format),
             V2(V2Format),
+        }
+
+        fn legacy_events_to_dense(events: Vec<Option<LegacyEvent>>) -> Vec<Event> {
+            events
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, maybe)| {
+                    maybe.map(|e| Event {
+                        event_type: e.event_type,
+                        message: e.message,
+                        analyzer_index: i,
+                    })
+                })
+                .collect()
         }
 
         match RowFormat::deserialize(deserializer)? {
@@ -371,7 +433,7 @@ impl<'de> Deserialize<'de> for AnalysisRow {
                     Ok(AnalysisRow {
                         packet_timestamp: Some(first_analysis.timestamp),
                         skipped_message_reason: None,
-                        events: first_analysis.events.clone(),
+                        events: legacy_events_to_dense(first_analysis.events.clone()),
                     })
                 } else if let Some(first_reason) = v1.skipped_message_reasons.first() {
                     Ok(AnalysisRow {
@@ -385,10 +447,15 @@ impl<'de> Deserialize<'de> for AnalysisRow {
                     ))
                 }
             }
+            RowFormat::V3(v3) => Ok(AnalysisRow {
+                packet_timestamp: v3.packet_timestamp,
+                skipped_message_reason: v3.skipped_message_reason,
+                events: v3.events,
+            }),
             RowFormat::V2(v2) => Ok(AnalysisRow {
                 packet_timestamp: v2.packet_timestamp,
                 skipped_message_reason: v2.skipped_message_reason,
-                events: v2.events,
+                events: legacy_events_to_dense(v2.events),
             }),
         }
     }
@@ -506,6 +573,22 @@ impl Harness {
         };
         row.packet_timestamp = packet_timestamp;
 
+        // Intercept LL1 timing messages before gsmtap_parser consumes the message.
+        // These are not converted to GSMTAP and would otherwise be silently dropped.
+        if let Message::Log {
+            timestamp,
+            body: LogBody::LteLl1ServingCellTiming { data },
+            ..
+        } = &qmdl_message
+        {
+            let timestamp = timestamp.to_datetime();
+            row.packet_timestamp = Some(timestamp);
+            let element = InformationElement::from_ll1_timing(data.starting_ul_timing_advance);
+            row.events = self.analyze_information_element(&element, timestamp);
+            self.assert_events_match_analyzers(&row.events);
+            return row;
+        }
+
         let (timestamp, gsmtap_msg) = match gsmtap_parser::parse(qmdl_message) {
             Ok(Some((timestamp, msg))) => (timestamp.to_datetime(), msg),
             Ok(None) => {
@@ -552,7 +635,7 @@ impl Harness {
         &mut self,
         ie: &InformationElement,
         timestamp: DateTime<FixedOffset>,
-    ) -> Vec<Option<Event>> {
+    ) -> Vec<Event> {
         // This method is private because incrementing packet_num is currently handled entirely by the other
         // methods that call this one. This could be changed with some careful refactoring, but
         // while this method is only used by other Harness methods, let's keep it private to help
@@ -560,25 +643,29 @@ impl Harness {
         let packet_str = self.packet_suffix();
         self.analyzers
             .iter_mut()
-            .map(|analyzer| {
+            .enumerate()
+            .filter_map(|(i, analyzer)| {
                 let mut maybe_event =
                     analyzer.analyze_information_element(ie, self.packet_num, timestamp);
                 if let Some(ref mut event) = maybe_event {
                     event.message.push_str(&packet_str);
+                    event.analyzer_index = i;
                 }
                 maybe_event
             })
             .collect()
     }
 
-    fn report_skipped_packet(&mut self, timestamp: DateTime<FixedOffset>) -> Vec<Option<Event>> {
+    fn report_skipped_packet(&mut self, timestamp: DateTime<FixedOffset>) -> Vec<Event> {
         let packet_str = self.packet_suffix();
         self.analyzers
             .iter_mut()
-            .map(|analyzer| {
+            .enumerate()
+            .filter_map(|(i, analyzer)| {
                 let mut maybe_event = analyzer.report_skipped_packet(timestamp);
                 if let Some(ref mut event) = maybe_event {
                     event.message.push_str(&packet_str);
+                    event.analyzer_index = i;
                 }
                 maybe_event
             })
@@ -589,8 +676,15 @@ impl Harness {
         format!(" (packet {})", self.packet_num)
     }
 
-    fn assert_events_match_analyzers(&self, events: &[Option<Event>]) {
-        assert_eq!(events.len(), self.analyzers.len());
+    fn assert_events_match_analyzers(&self, events: &[Event]) {
+        for event in events {
+            assert!(
+                event.analyzer_index < self.analyzers.len(),
+                "event.analyzer_index {} is out of bounds for {} analyzers",
+                event.analyzer_index,
+                self.analyzers.len()
+            );
+        }
     }
 
     pub fn get_metadata(&self) -> ReportMetadata {
@@ -620,6 +714,7 @@ mod tests {
 
     #[test]
     fn test_analysis_row_deserialize_old_format() {
+        // V2 format with legacy event_type encoding; null element is dropped
         let row: AnalysisRow = serde_json::from_value(json!({
             "packet_timestamp": "2023-01-01T00:00:00+00:00",
             "skipped_message_reason": null,
@@ -637,16 +732,17 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(row.events[0].as_ref().unwrap().event_type, EventType::High);
-        assert_eq!(
-            row.events[1].as_ref().unwrap().event_type,
-            EventType::Informational
-        );
-        assert!(row.events[2].is_none());
+        // Null at position 2 is dropped; analyzer_index reflects original position
+        assert_eq!(row.events.len(), 2);
+        assert_eq!(row.events[0].event_type, EventType::High);
+        assert_eq!(row.events[0].analyzer_index, 0);
+        assert_eq!(row.events[1].event_type, EventType::Informational);
+        assert_eq!(row.events[1].analyzer_index, 1);
     }
 
     #[test]
-    fn test_analysis_row_deserialize_new_format() {
+    fn test_analysis_row_deserialize_v2_format() {
+        // V2 format with current event_type strings; null element is dropped
         let row: AnalysisRow = serde_json::from_value(json!({
             "packet_timestamp": "2023-01-01T00:00:00+00:00",
             "skipped_message_reason": null,
@@ -658,12 +754,50 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(row.events[0].as_ref().unwrap().event_type, EventType::High);
-        assert_eq!(
-            row.events[1].as_ref().unwrap().event_type,
-            EventType::Informational
-        );
-        assert!(row.events[2].is_none());
+        assert_eq!(row.events.len(), 2);
+        assert_eq!(row.events[0].event_type, EventType::High);
+        assert_eq!(row.events[0].analyzer_index, 0);
+        assert_eq!(row.events[1].event_type, EventType::Informational);
+        assert_eq!(row.events[1].analyzer_index, 1);
+    }
+
+    #[test]
+    fn test_analysis_row_deserialize_v3_format() {
+        // V3 format: dense array with explicit analyzer_index
+        let row: AnalysisRow = serde_json::from_value(json!({
+            "packet_timestamp": "2023-01-01T00:00:00+00:00",
+            "skipped_message_reason": null,
+            "events": [
+                { "event_type": "High", "message": "Test warning", "analyzer_index": 3 }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(row.events.len(), 1);
+        assert_eq!(row.events[0].event_type, EventType::High);
+        // analyzer_index must be preserved, not reassigned from position
+        assert_eq!(row.events[0].analyzer_index, 3);
+    }
+
+    #[test]
+    fn test_analysis_row_v3_round_trip() {
+        let row = AnalysisRow {
+            packet_timestamp: Some(
+                DateTime::parse_from_rfc3339("2023-01-01T00:00:00+00:00").unwrap(),
+            ),
+            skipped_message_reason: None,
+            events: vec![Event {
+                event_type: EventType::High,
+                message: "Test".to_string(),
+                analyzer_index: 2,
+            }],
+        };
+        let serialized = serde_json::to_string(&row).unwrap();
+        assert!(serialized.contains("\"analyzer_index\":2"));
+        let deserialized: AnalysisRow = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.events.len(), 1);
+        assert_eq!(deserialized.events[0].analyzer_index, 2);
+        assert_eq!(deserialized.events[0].event_type, EventType::High);
     }
 
     use crate::analysis::no_nas_messages::NoNasMessagesAnalyzer;
@@ -697,13 +831,13 @@ mod tests {
 
         let row =
             harness.analyze_qmdl_message(Ok(log_message(0, LogBody::IpTraffic { msg: vec![] })));
-        assert!(row.events.iter().all(|event| event.is_none()));
+        assert!(row.events.is_empty());
 
         let row = harness.analyze_qmdl_message(Ok(log_message(
             ALMOST_FIVE_MINUTES_TS,
             LogBody::IpTraffic { msg: vec![] },
         )));
-        assert!(row.events.iter().all(|event| event.is_none()));
+        assert!(row.events.is_empty());
 
         let nas = log_message(
             FIVE_MINUTES_TS,
@@ -718,8 +852,7 @@ mod tests {
             },
         );
         let row = harness.analyze_qmdl_message(Ok(nas));
-        assert_eq!(row.events.len(), 1);
-        assert!(row.events.iter().all(|event| event.is_none()));
+        assert!(row.events.is_empty());
     }
 
     #[test]
@@ -732,19 +865,73 @@ mod tests {
 
         let row =
             harness.analyze_qmdl_message(Ok(log_message(0, LogBody::IpTraffic { msg: vec![] })));
-        assert!(row.events.iter().all(|event| event.is_none()));
+        assert!(row.events.is_empty());
 
         let row = harness.analyze_qmdl_message(Ok(log_message(
             ALMOST_FIVE_MINUTES_TS,
             LogBody::IpTraffic { msg: vec![] },
         )));
-        assert!(row.events.iter().all(|event| event.is_none()));
+        assert!(row.events.is_empty());
 
         let row = harness.analyze_qmdl_message(Ok(log_message(
             FIVE_MINUTES_TS,
             LogBody::IpTraffic { msg: vec![] },
         )));
-        let event = row.events[0].as_ref().expect("expected a warning event");
+        let event = row.events.first().expect("expected a warning event");
+        assert_eq!(event.analyzer_index, 0);
         assert!(event.message.ends_with(" (packet 3)"));
+    }
+
+    #[test]
+    fn test_ll1_timing_advance_intercept_fires_outlier_event() {
+        use crate::analysis::timing_advance::TimingAdvanceAnalyzer;
+        use crate::diag::diaglog::ll1;
+
+        let mut harness = Harness::new();
+        harness.add_analyzer(
+            TimingAdvanceAnalyzer::metadata(),
+            Box::new(TimingAdvanceAnalyzer::new()),
+        );
+
+        let stable_data = ll1::ServingCellTiming {
+            version: 0,
+            num_records: 0,
+            starting_sub_fn: 0,
+            starting_system_fn: 0,
+            starting_dl_frame_timing_offs: 0,
+            starting_ul_frame_timing_offs: 0,
+            starting_ul_timing_advance: 10,
+            timing_adjustment: vec![],
+        };
+        // Feed samples with variance (alternating 10 and 12) so std_dev > 1.0
+        // for outlier detection to become active
+        for i in 0..50u64 {
+            let ta = if i % 2 == 0 { 10 } else { 12 };
+            let data = ll1::ServingCellTiming {
+                starting_ul_timing_advance: ta,
+                ..stable_data.clone()
+            };
+            harness.analyze_qmdl_message(Ok(log_message(
+                i << 16,
+                LogBody::LteLl1ServingCellTiming { data },
+            )));
+        }
+
+        let outlier_data = ll1::ServingCellTiming {
+            starting_ul_timing_advance: 200,
+            ..stable_data
+        };
+        let row = harness.analyze_qmdl_message(Ok(log_message(
+            50 << 16,
+            LogBody::LteLl1ServingCellTiming { data: outlier_data },
+        )));
+        assert!(!row.events.is_empty(), "expected outlier event");
+        let event = &row.events[0];
+        assert_eq!(event.event_type, EventType::Medium);
+        // Packet number in message is based on packet_num which comes from log packet number
+        assert!(
+            event.message.contains("packet"),
+            "event message should contain packet number"
+        );
     }
 }

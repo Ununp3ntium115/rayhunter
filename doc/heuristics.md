@@ -90,8 +90,105 @@ A recording containing no diagnostic messages at all cannot trigger this analyze
 
 This heuristic is experimental. It may produce a false positive if the device receives radio traffic but cannot reach a network that produces NAS traffic.
 
+### LTE Positioning Protocol (LPP) (v1)
+
+*(disabled by default)*
+
+This analyzer detects LTE Positioning Protocol (LPP) messages used for device location tracking. LPP is a legitimate 3GPP protocol used by mobile networks to determine the geographic location of mobile devices for location-based services (such as emergency services, navigation, or location-dependent applications).
+
+LPP operates at the EMM (Mobility Management) layer and is carried in Generic NAS Transport messages. The analyzer reports:
+
+* **Downlink LPP messages** (network-to-UE): These are location requests or information from the network to the device.
+* **Uplink LPP messages** (UE-to-network): These are responses or location information from the device to the network.
+
+**False positives and legitimate use:**
+
+This analyzer is informational only and does **not** indicate malicious activity. Legitimate mobile networks use LPP for:
+
+* GPS-assisted location services (A-GPS)
+* Emergency location services (E911/E112)
+* Location-based services (navigation, geofencing)
+* Network optimization and coverage analysis (MDT/minimization of drive tests)
+
+Most users connected to legitimate networks may observe LPP messages, especially when:
+* Location services are enabled on the device
+* Connecting in areas served by modern 3GPP-compliant base stations
+* Using emergency services or location-dependent applications
+
+This heuristic is disabled by default because LPP activity is expected on legitimate networks. Enable it if you wish to monitor LPP activity or to correlate with other suspicious indicators detected by other heuristics.
+
 ### Test Analyzer
 
 *(disabled by default)*
 
 This analyzer is great for testing if your Rayhunter installation works. It will alert every time a new tower is seen (specifically every time a tower broadcasts a SIB1 message.) It is designed to be very noisy so we do not recommend leaving it on but if this alerts it means your Rayhunter device is working! 
+
+### Timing Advance Outlier
+
+Monitors the LTE Timing Advance (TA) value from baseband diagnostic logs (log code 0xb114). TA is the round-trip propagation delay between the device and the serving cell, expressed in units of 16 Ts (≈78 m one-way per index). A legitimate tower 1 km away has TA ≈ 13; a tower 10 km away has TA ≈ 128.
+
+IMSI catchers are often physically close to the target (same room or street), which produces an unusually small TA. Conversely, a spoofed cell identity at an impossible distance produces an unusually large TA.
+
+This heuristic tracks a running mean and standard deviation using Welford's online algorithm. After a 20-sample warmup period, a TA more than 2.5σ from the session mean triggers a Medium severity event.
+
+**Known limitations (v1):** The distribution is global across all cells. A legitimate handover to a nearby small cell will produce a true TA drop that could trigger a false positive. Per-cell partitioning (keyed by PCI or EARFCN) is planned for a future version.
+
+### Paging Message Storm (v1)
+
+Detects excessive LTE paging messages that may indicate an IMSI catcher attempting to locate or track the device.
+
+This analyzer triggers on two independent conditions:
+
+**High Severity:** More than 50 paging messages (LTE_RRC.Paging on PCCH) within a 60-second time window. After alert fires, the detector resets to prevent duplicate alerts within that burst.
+
+**Medium Severity:** Paging messages comprise more than 30% of captured traffic (once per recording after a 20-packet warmup). Normal captures show 1-5 paging messages; >30% traffic is anomalous.
+
+**False positive conditions:** A busy urban cell legitimately produces high paging rates because all users sharing a paging occasion receive the broadcast message. ETWS (Earthquake and Tsunami Warning System) and CMAS (Commercial Mobile Alert System) emergency broadcasts also use the Paging message type. If other IMSI catcher heuristics do not corroborate, the paging rate may be legitimate.
+
+### Rapid RRC Connection Setup (v1)
+
+Detects multiple RRC connection setup messages within short time windows, which may indicate forced connection re-establishment attacks or IMSI catcher activity.
+
+An RRCConnectionSetup message (sent on the downlink common control channel, DL-CCCH) is normally sent once per connection session when the network grants a mobile device's connection request. IMSI catchers may trigger rapid, repeated connection setups to force the device through multiple security procedures (capability exchange, security mode command, etc.), enabling cipher algorithm downgrade attacks. Each setup procedure exchanges encryption capabilities, creating opportunities to negotiate weaker algorithms.
+
+This analyzer triggers on two independent conditions:
+
+**High Severity:** More than 2 RRCConnectionSetup messages within a 300-second time window. After alert fires, the detector resets to prevent duplicate alerts within that burst.
+
+**Medium Severity:** RRCConnectionSetup messages comprise more than 3% of total captured traffic (once per recording after a 100-packet warmup). Normal captures show <1% setup traffic; >3% is anomalous.
+
+**False positive conditions:** Rapid idle-to-connected state cycling on unstable networks or with aggressive LTE connection policies may produce multiple setups. A carrier with misconfigured connection release timers could trigger false positives if the device rapidly disconnects and reconnects. If other IMSI catcher heuristics (e.g., null cipher, downgrade attacks) do not corroborate, the setup rate may reflect network instability rather than malicious activity.
+
+**Limitations (v1):** This detector is blind to the sequence context (e.g., whether setups follow explicit RRCConnectionRelease messages with cause="other"). Such sequencing is documented in PCAP analysis but not yet correlated. A future version may correlate release-then-setup cycles for higher specificity.
+
+### Connection Release Storm (v1)
+
+Detects excessive RRC connection release messages that may indicate forced connection termination attacks.
+
+An RRCConnectionRelease message (sent on the downlink dedicated control channel, DL-DCCH) normally occurs once per session when the network or device initiates disconnection. IMSI catchers may forcibly terminate connections to trigger device re-attachment cycles, enabling handover spoofing attacks or cipher algorithm downgrade through repeated security procedure re-execution.
+
+Only releases with cause="other" are counted; releases due to load balancing or CS fallback are normal network behavior. Each release-then-reattach cycle re-executes authentication and capability exchange, creating opportunities for the attacker to negotiate weaker encryption algorithms.
+
+This analyzer triggers on two independent conditions:
+
+**High Severity:** More than 2 RRCConnectionRelease messages with cause="other" within a 10-second time window (i.e., 3+ consecutive rapid releases). After alert fires, the detector prevents immediate re-trigger by requiring a 10-second gap before the next HIGH alert.
+
+**Medium Severity:** More than 3 RRCConnectionRelease messages with cause="other" within a 300-second time window (i.e., 4+). Fires once per recording to indicate sustained, moderately-paced forced termination activity.
+
+**False positive conditions:** A heavily congested network or device with misconfigured connection policies may legitimately cycle connections rapidly. A misbehaving UE (user equipment) might re-initiate too quickly. If other IMSI catcher heuristics (e.g., null cipher, downgrade attacks) do not corroborate, the release rate may reflect network instability rather than malicious activity. Emergency fallback scenarios (e.g., moving between RATs) can also produce multiple rapid releases.
+
+**Correlation:** Release storm activity strongly correlates with Rapid RRC Connection Setup detections, as each release is immediately followed by a new setup, paging, and service request. Detection of both together is a high-confidence indicator of active IMSI catcher attacks.
+
+### Measurement Report Profiling (v1)
+
+Detects aggressive measurement report patterns indicating signal strength profiling attacks by fake cells.
+
+A MeasurementReport message (sent on the uplink dedicated control channel, UL-DCCH) normally contains signal strength metrics (RSRP/RSRQ) for the serving and neighbor cells. Legitimate networks request periodic measurement reports every 10-40 seconds to support mobility and handover decisions. IMSI catchers may request frequent measurement reports to build detailed UE location profiles, enabling handover spoofing, location tracking, or cipher algorithm downgrade attacks. The attacker uses the measurement data to predict optimal handover points and intercept the device during transitions.
+
+This analyzer triggers on two independent conditions:
+
+**High Severity:** 12 or more measurement reports within a 60-second time window (rate of 1 report per 5 seconds or faster). After alert fires, the detector resets to prevent duplicate alerts within that burst.
+
+**Medium Severity:** More than 5 measurement reports within a 120-second time window (i.e., 6+). Fires once per recording to indicate sustained, aggressive profiling activity.
+
+**False positive conditions:** Event-triggered measurement reports (A2/A3 events) during high mobility scenarios (train, highway) produce legitimate bursts. Cell-edge oscillation in marginal coverage areas causes frequent re-measurement. Dense small-cell deployments (femtocells, picocells) with optimized MDT (Minimization of Drive Tests) configurations generate higher report densities per 3GPP standards. LTE handover preparation in congested urban areas legitimately increases report frequency. If other IMSI catcher heuristics (e.g., paging storm, connection release storm, null cipher) do not corroborate, the measurement rate may reflect network mobility optimization rather than malicious profiling activity.
