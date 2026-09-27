@@ -80,7 +80,7 @@ impl Analyzer for RapidConnectionSetupAnalyzer {
     fn metadata() -> AnalyzerMetadata {
         AnalyzerMetadata {
             key: "rapid_connection_setup".into(),
-            default_enabled: true,
+            default_enabled: false,
             name: "Rapid RRC Connection Setup".into(),
             description: "Detects multiple RRC connection setup messages within short time windows, which may indicate \
                 forced connection re-establishment attacks or IMSI catcher activity. IMSI catchers may trigger rapid setups \

@@ -73,7 +73,7 @@ impl Analyzer for PagingStormAnalyzer {
     fn metadata() -> AnalyzerMetadata {
         AnalyzerMetadata {
             key: "paging_storm".into(),
-            default_enabled: true,
+            default_enabled: false,
             name: "Paging Message Storm".into(),
             description: "Detects excessive LTE paging messages that may indicate an IMSI catcher. \
                 Fires HIGH severity if >50 paging messages occur within 60 seconds, or MEDIUM severity \
@@ -94,13 +94,13 @@ impl Analyzer for PagingStormAnalyzer {
         }
 
         // Check time-window threshold (HIGH severity)
+        let window_count = self.paging_timestamps.len() + 1;
         if self.check_time_window_threshold(timestamp) {
             return Some(Event {
                 event_type: EventType::High,
                 message: format!(
-                    "Paging message storm detected: {} paging messages in 60-second window. \
+                    "Paging message storm detected: {window_count} paging messages in 60-second window. \
                      This may indicate an IMSI catcher attempting to track the device.",
-                    self.paging_timestamps.len()
                 ),
                 analyzer_index: 0,
             });

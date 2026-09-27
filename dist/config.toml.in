@@ -106,5 +106,10 @@ incomplete_sib = true
 test_analyzer = false
 diagnostic_analyzer = true
 no_nas_messages = false
-timing_advance_outlier = true
+timing_advance_outlier = false
 lpp_positioning = false
+# The following heuristics are new and not yet validated against real captures; they default to off.
+paging_storm = false
+rapid_connection_setup = false
+connection_release_storm = false
+measurement_report_profiling_detector = false
