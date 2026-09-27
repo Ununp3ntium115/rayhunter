@@ -3,8 +3,5 @@
 .DS_Store
 /tools/build-wpa-supplicant
 /node_modules
-/.claude
+# machine-local CodeGraph index/daemon state
 /.codegraph
-/.hermes
-/.mcp.json
-/.superpowers

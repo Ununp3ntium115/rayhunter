@@ -10,6 +10,8 @@ Rayhunter (EFF) detects IMSI catchers / cell-site simulators. A Rust daemon runs
 
 The Rust toolchain is pinned in `rust-toolchain.toml`. CI builds with `RUSTFLAGS=-Dwarnings`, so warnings fail.
 
+`./scripts/ci-local.sh` runs the same checks as the `main` GitHub Actions workflow locally (`--all` adds docs, rootshell, firmware and installer-gui builds).
+
 ```sh
 # The daemon embeds the built frontend via include_bytes!, so build the web UI
 # before `cargo check`/`test` on the daemon (from repo root, npm workspaces):

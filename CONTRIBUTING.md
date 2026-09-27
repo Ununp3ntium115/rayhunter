@@ -52,7 +52,8 @@ Otherwise:
   source](https://efforg.github.io/rayhunter/installing-from-source.html) for
   how to build Rayhunter from the git repository.
 
-- Ensure that `cargo fmt` and `cargo clippy` have been run.
+- Ensure that `cargo fmt` and `cargo clippy` have been run. `./scripts/ci-local.sh`
+  runs the same checks as CI locally.
 
 - If you add new features, please do your best to both write tests for and also
   manually test them. Our test coverage isn't great, but as new features are
