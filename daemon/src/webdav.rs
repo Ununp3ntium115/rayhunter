@@ -11,7 +11,7 @@ use tokio_util::io::ReaderStream;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::config::WebdavConfig;
-use crate::qmdl_store::{FileKind, RecordingMetadata, RecordingStore};
+use crate::qmdl_store::{FileKind, RecordingStore};
 
 pub struct WebdavUploadWorkerConfig {
     poll_interval: Duration,
@@ -222,6 +222,7 @@ pub fn run_webdav_upload_worker(
 mod tests {
     use super::*;
     use crate::config::GpsMode;
+    use crate::qmdl_store::RecordingMetadata;
     use axum::{
         Router,
         body::Bytes,

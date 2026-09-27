@@ -34,7 +34,7 @@ use crate::display::DisplayState;
 use crate::gps::GpsData;
 use crate::notifications::DEFAULT_NOTIFICATION_TIMEOUT;
 use crate::pcap::{generate_pcap_data, load_gps_records_for_entry};
-use crate::qmdl_store::{FileKind, RecordingMetadata, RecordingStore};
+use crate::qmdl_store::{FileKind, RecordingStore};
 use crate::update::UpdateStatus;
 
 pub struct ServerState {
@@ -383,10 +383,7 @@ pub async fn get_zip(
         (entry_index, entry.display_name.clone())
     };
 
-    let zip_filename = display_name
-        .as_deref()
-        .unwrap_or(&qmdl_idx)
-        .to_string();
+    let zip_filename = display_name.as_deref().unwrap_or(&qmdl_idx).to_string();
     let qmdl_store_lock = state.qmdl_store_lock.clone();
     let gps_records = load_gps_records_for_entry(&state, entry_index).await;
 
@@ -744,6 +741,7 @@ mod tests {
 
     use super::*;
     use crate::config::GpsMode;
+    use crate::qmdl_store::RecordingMetadata;
     use async_zip::base::read::mem::ZipFileReader;
     use axum::extract::{Path, State};
     use futures::AsyncReadExt;
