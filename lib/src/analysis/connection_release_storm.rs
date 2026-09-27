@@ -128,7 +128,7 @@ impl Analyzer for ConnectionReleaseStormAnalyzer {
     fn metadata() -> AnalyzerMetadata {
         AnalyzerMetadata {
             key: "connection_release_storm".into(),
-            default_enabled: true,
+            default_enabled: false,
             name: "Connection Release Storm".into(),
             description: "Detects excessive RRC connection release messages that may indicate a forced \
                 connection termination attack. A fake cell may forcibly terminate connections to trigger \

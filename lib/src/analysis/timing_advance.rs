@@ -56,7 +56,7 @@ impl Analyzer for TimingAdvanceAnalyzer {
     fn metadata() -> AnalyzerMetadata {
         AnalyzerMetadata {
             key: "timing_advance_outlier".into(),
-            default_enabled: true,
+            default_enabled: false,
             name: "Timing Advance Outlier".into(),
             description: "Flags LTE Timing Advance values that are statistical outliers \
                 (>2.5σ from the session mean). An unusually small TA can indicate a \

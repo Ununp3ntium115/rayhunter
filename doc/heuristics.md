@@ -127,6 +127,8 @@ This analyzer is great for testing if your Rayhunter installation works. It will
 
 ### Timing Advance Outlier
 
+Disabled by default. Enable it with `timing_advance_outlier = true` under `[analyzers]` in the config file.
+
 Monitors the LTE Timing Advance (TA) value from baseband diagnostic logs (log code 0xb114). TA is the round-trip propagation delay between the device and the serving cell, expressed in units of 16 Ts (≈78 m one-way per index). A legitimate tower 1 km away has TA ≈ 13; a tower 10 km away has TA ≈ 128.
 
 IMSI catchers are often physically close to the target (same room or street), which produces an unusually small TA. Conversely, a spoofed cell identity at an impossible distance produces an unusually large TA.
@@ -136,6 +138,8 @@ This heuristic tracks a running mean and standard deviation using Welford's onli
 **Known limitations (v1):** The distribution is global across all cells. A legitimate handover to a nearby small cell will produce a true TA drop that could trigger a false positive. Per-cell partitioning (keyed by PCI or EARFCN) is planned for a future version.
 
 ### Paging Message Storm (v1)
+
+Disabled by default. Enable it with `paging_storm = true` under `[analyzers]` in the config file.
 
 Detects excessive LTE paging messages that may indicate an IMSI catcher attempting to locate or track the device.
 
@@ -148,6 +152,8 @@ This analyzer triggers on two independent conditions:
 **False positive conditions:** A busy urban cell legitimately produces high paging rates because all users sharing a paging occasion receive the broadcast message. ETWS (Earthquake and Tsunami Warning System) and CMAS (Commercial Mobile Alert System) emergency broadcasts also use the Paging message type. If other IMSI catcher heuristics do not corroborate, the paging rate may be legitimate.
 
 ### Rapid RRC Connection Setup (v1)
+
+Disabled by default. Enable it with `rapid_connection_setup = true` under `[analyzers]` in the config file.
 
 Detects multiple RRC connection setup messages within short time windows, which may indicate forced connection re-establishment attacks or IMSI catcher activity.
 
@@ -164,6 +170,8 @@ This analyzer triggers on two independent conditions:
 **Limitations (v1):** This detector is blind to the sequence context (e.g., whether setups follow explicit RRCConnectionRelease messages with cause="other"). Such sequencing is documented in PCAP analysis but not yet correlated. A future version may correlate release-then-setup cycles for higher specificity.
 
 ### Connection Release Storm (v1)
+
+Disabled by default. Enable it with `connection_release_storm = true` under `[analyzers]` in the config file.
 
 Detects excessive RRC connection release messages that may indicate forced connection termination attacks.
 
@@ -182,6 +190,8 @@ This analyzer triggers on two independent conditions:
 **Correlation:** Release storm activity strongly correlates with Rapid RRC Connection Setup detections, as each release is immediately followed by a new setup, paging, and service request. Detection of both together is a high-confidence indicator of active IMSI catcher attacks.
 
 ### Measurement Report Profiling (v1)
+
+Disabled by default. Enable it with `measurement_report_profiling_detector = true` under `[analyzers]` in the config file.
 
 Detects aggressive measurement report patterns indicating signal strength profiling attacks by fake cells.
 

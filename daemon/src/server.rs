@@ -535,17 +535,18 @@ pub async fn get_zip(
     description = "Stream a ZIP containing every non-empty recording, each in its own subdirectory named after the recording ID."
 ))]
 pub async fn get_all_zip(State(state): State<Arc<ServerState>>) -> Response {
-    // Snapshot names of non-empty, completed entries; indices are re-resolved inside the
-    // spawn to stay safe against concurrent deletes shifting the index space.
-    // Exclude in-progress recordings (stop_reason is None) to avoid including incomplete files.
+    // Snapshot names of non-empty entries, skipping the one still being written; indices are
+    // re-resolved inside the spawn to stay safe against concurrent deletes shifting the index space.
     let entry_names: Vec<String> = {
         let qmdl_store = state.qmdl_store_lock.read().await;
+        let current_entry = qmdl_store.current_entry;
         qmdl_store
             .manifest
             .entries
             .iter()
-            .filter(|e| e.qmdl_size_bytes > 0 && e.stop_reason.is_some())
-            .map(|e| e.name.clone())
+            .enumerate()
+            .filter(|(i, e)| e.qmdl_size_bytes > 0 && Some(*i) != current_entry)
+            .map(|(_, e)| e.name.clone())
             .collect()
     };
 
@@ -966,6 +967,61 @@ mod tests {
         assert_eq!(
             qmdl_reader.get_next_message().await.unwrap(),
             Some(Ok(expected_message)),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_all_zip_includes_stopped_entries_and_skips_current() {
+        let (_temp_dir, store_lock) = create_test_qmdl_store().await;
+        let test_qmdl_data = create_test_container();
+        let closed_name = create_test_entry_with_data(&store_lock, &test_qmdl_data).await;
+        // Entry names are Unix seconds, so a second entry needs a later second to get its own name.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let open_name = {
+            let mut store = store_lock.write().await;
+            assert!(
+                store.manifest.entries[0].stop_reason.is_none(),
+                "a normal stop must leave stop_reason unset for this test to be meaningful"
+            );
+            let (mut qmdl_gz_file, _analysis_file) = store
+                .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+                .await
+                .unwrap();
+            let mut writer = QmdlWriter::new(&mut qmdl_gz_file);
+            writer.write_container(&test_qmdl_data).await.unwrap();
+            writer.close().await.unwrap();
+            let size = qmdl_gz_file.metadata().await.unwrap().len() as usize;
+            store.update_current_entry_qmdl_size(size).await.unwrap();
+            store.manifest.entries[store.current_entry.unwrap()]
+                .name
+                .clone()
+        };
+        assert_ne!(closed_name, open_name);
+        let state = create_test_server_state(store_lock);
+
+        let response = get_all_zip(State(state)).await;
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let zip_reader = ZipFileReader::new(body_bytes.to_vec()).await.unwrap();
+        let filenames: Vec<String> = zip_reader
+            .file()
+            .entries()
+            .iter()
+            .map(|entry| entry.filename().as_str().unwrap().to_string())
+            .collect();
+
+        assert!(
+            filenames
+                .iter()
+                .any(|f| f.starts_with(&format!("{closed_name}/"))),
+            "stopped recording missing from all.zip: {filenames:?}"
+        );
+        assert!(
+            !filenames
+                .iter()
+                .any(|f| f.starts_with(&format!("{open_name}/"))),
+            "in-progress recording must not be in all.zip: {filenames:?}"
         );
     }
 }
