@@ -10,7 +10,11 @@ We recommend using a SIM card from a carrier from whichever country you are loca
 
 ### How can I test that my device is working?
 
-You can enable the `Test Heuristic` under `Analyzer Heuristic Settings` in the config section on your web dashboard. This will cause an alert to trigger every time your device sees a cell tower, you might need to reboot your device or move around a bit to get this one to trigger, but it will be very noisy once it does. People have also tested it by building IMSI catchers at home, but we don't recommend that, since it violates FCC regulations and will probably upset your neighbors.
+You can enable the `Test Heuristic` under `Analyzer Heuristic Settings` in the config section on your web dashboard. This will cause an alert to trigger every time your device sees a cell tower. You might need to reboot your device or move around a bit to get this one to trigger, but it will be very noisy once it does.
+
+**Note:** The Test Heuristic can fire even without an active SIM card. Cell towers broadcast system information (SIB1 messages) continuously, and Rayhunter receives these over the DIAG interface regardless of whether a SIM is present or registered. Seeing a Test Heuristic alert with no SIM inserted is expected — it confirms the analyzer is receiving cellular data, not that anything suspicious is happening.
+
+People have also tested it by building IMSI catchers at home, but we don't recommend that, since it violates FCC regulations and will probably upset your neighbors.
 
 <a name="red"></a>
 
