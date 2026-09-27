@@ -340,6 +340,15 @@ impl Analyzer for ImsiRequestedAnalyzer {
     }
 }
 
+// Helper used only in tests: call transition and return the flag.
+#[cfg(test)]
+impl ImsiRequestedAnalyzer {
+    fn transition_and_take(&mut self, next_state: State, packet_num: usize) -> Option<Event> {
+        self.transition(next_state, packet_num);
+        self.flag.take()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,14 +402,5 @@ mod tests {
         a.transition(State::IdentityRequest, 4);
         let evt = a.transition_and_take(State::Disconnect, 5);
         assert!(evt.is_some(), "second session disconnect must still alarm");
-    }
-}
-
-// Helper used only in tests: call transition and return the flag.
-#[cfg(test)]
-impl ImsiRequestedAnalyzer {
-    fn transition_and_take(&mut self, next_state: State, packet_num: usize) -> Option<Event> {
-        self.transition(next_state, packet_num);
-        self.flag.take()
     }
 }
