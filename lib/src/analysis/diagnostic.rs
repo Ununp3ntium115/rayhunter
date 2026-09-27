@@ -187,9 +187,18 @@ mod tests {
     fn test_non_lte_returns_none() {
         let mut a = DiagnosticAnalyzer::new();
         let t = ts();
-        assert!(a.analyze_information_element(&InformationElement::GSM, 0, t).is_none());
-        assert!(a.analyze_information_element(&InformationElement::UMTS, 0, t).is_none());
-        assert!(a.analyze_information_element(&InformationElement::FiveG, 0, t).is_none());
+        assert!(
+            a.analyze_information_element(&InformationElement::GSM, 0, t)
+                .is_none()
+        );
+        assert!(
+            a.analyze_information_element(&InformationElement::UMTS, 0, t)
+                .is_none()
+        );
+        assert!(
+            a.analyze_information_element(&InformationElement::FiveG, 0, t)
+                .is_none()
+        );
     }
 
     #[test]

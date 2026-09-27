@@ -770,7 +770,10 @@ mod tests {
         let mut store = RecordingStore::create(dir.path()).await.unwrap();
 
         // Create an entry to get the proper manifest format
-        let _ = store.new_entry(GpsMode::Disabled, RecordingMetadata::default()).await.unwrap();
+        let _ = store
+            .new_entry(GpsMode::Disabled, RecordingMetadata::default())
+            .await
+            .unwrap();
         store.close_current_entry().await.unwrap();
         drop(store);
 
@@ -779,12 +782,15 @@ mod tests {
         let manifest_str = tokio::fs::read_to_string(&manifest_path).await.unwrap();
 
         // Remove the new fields to simulate an old manifest
-        let old_manifest = manifest_str.lines()
+        let old_manifest = manifest_str
+            .lines()
             .filter(|line| !line.contains("metadata_version") && !line.contains("device_model"))
             .collect::<Vec<_>>()
             .join("\n");
 
-        tokio::fs::write(&manifest_path, old_manifest).await.unwrap();
+        tokio::fs::write(&manifest_path, old_manifest)
+            .await
+            .unwrap();
 
         // Reload and verify it parses correctly with defaults
         let loaded = RecordingStore::load(dir.path()).await.unwrap();
@@ -812,9 +818,14 @@ mod tests {
         let manifest_str = tokio::fs::read_to_string(&manifest_path).await.unwrap();
 
         // Replace the device_model value with a future unknown device
-        let future_manifest = manifest_str.replace("device_model = \"orbic\"", "device_model = \"futuredevice\"");
+        let future_manifest = manifest_str.replace(
+            "device_model = \"orbic\"",
+            "device_model = \"futuredevice\"",
+        );
 
-        tokio::fs::write(&manifest_path, future_manifest).await.unwrap();
+        tokio::fs::write(&manifest_path, future_manifest)
+            .await
+            .unwrap();
 
         // Reload and verify it still parses correctly
         let loaded = RecordingStore::load(dir.path()).await.unwrap();
@@ -921,13 +932,28 @@ mod tests {
         let entry_toml = toml::to_string(&entry).unwrap();
 
         // Verify no sensitive fields are present
-        assert!(!entry_json.contains("password"), "entry JSON should not contain password");
-        assert!(!entry_toml.contains("password"), "entry TOML should not contain password");
+        assert!(
+            !entry_json.contains("password"),
+            "entry JSON should not contain password"
+        );
+        assert!(
+            !entry_toml.contains("password"),
+            "entry TOML should not contain password"
+        );
 
         // Verify safe fields are present
-        assert!(entry_json.contains("device_model"), "device_model should be in export");
-        assert!(entry_json.contains("orbic"), "device model name should be in export");
-        assert!(entry_toml.contains("metadata_version"), "metadata_version should be in export");
+        assert!(
+            entry_json.contains("device_model"),
+            "device_model should be in export"
+        );
+        assert!(
+            entry_json.contains("orbic"),
+            "device model name should be in export"
+        );
+        assert!(
+            entry_toml.contains("metadata_version"),
+            "metadata_version should be in export"
+        );
 
         // Verify device_model is actually exported
         assert_eq!(entry.device_model, Some("orbic".to_string()));
