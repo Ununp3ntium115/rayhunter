@@ -5,3 +5,4 @@
 /node_modules
 # machine-local CodeGraph index/daemon state
 /.codegraph
+/release-out
