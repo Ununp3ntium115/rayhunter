@@ -248,9 +248,9 @@ enum UtilSubCommand {
     /// Send a serial command to the Orbic.
     #[cfg(not(target_os = "android"))]
     Serial(Serial),
-    /// Start an ADB shell
+    /// Start an ADB shell on an Orbic installed with `orbic-usb`, or run one command as root.
     #[cfg(not(target_os = "android"))]
-    Shell,
+    Shell(ShellArgs),
     /// Root the Tmobile and launch adb.
     #[cfg(not(target_os = "android"))]
     TmobileStartAdb(TmobileArgs),
@@ -348,6 +348,13 @@ struct WingtechArgs {
 }
 
 #[derive(Parser, Debug)]
+struct ShellArgs {
+    /// Command to run as root instead of opening an interactive shell,
+    /// e.g. `installer util shell "echo 3 > /usrdata/mode.cfg"`.
+    command: Vec<String>,
+}
+
+#[derive(Parser, Debug)]
 struct Serial {
     #[arg(long)]
     root: bool,
@@ -390,7 +397,7 @@ async fn run(args: Args) -> Result<(), Error> {
                 }
             }
             #[cfg(not(target_os = "android"))]
-            UtilSubCommand::Shell => orbic::shell().await.context("\nFailed to open shell on Orbic RC400L")?,
+            UtilSubCommand::Shell(args) => orbic::shell(&args.command).await.context("\nFailed to open shell on Orbic RC400L")?,
             UtilSubCommand::TmobileStartTelnet(args) => wingtech::start_telnet(&args.admin_ip, &args.admin_password).await.context("\nFailed to start telnet on the Tmobile TMOHS1")?,
             #[cfg(not(target_os = "android"))]
             UtilSubCommand::TmobileStartAdb(args) => wingtech::start_adb(&args.admin_ip, &args.admin_password).await.context("\nFailed to start adb on the Tmobile TMOHS1")?,

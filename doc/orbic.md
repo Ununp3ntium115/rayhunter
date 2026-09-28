@@ -79,3 +79,10 @@ enabled. Instead, you can use:
 If you are using an installer prior to 0.7.0 or `orbic-usb` explicitly, you can
 obtain a root shell by running `adb shell` or `./installer util shell`. Then,
 inside of that shell you can run `/bin/rootshell` to obtain "fakeroot."
+
+To run a single command as root over ADB without opening a shell, pass it
+as one quoted argument:
+
+```bash
+./installer util shell "echo 9 > /usrdata/mode.cfg"
+```
