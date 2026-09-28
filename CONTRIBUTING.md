@@ -75,10 +75,15 @@ You can read our [full policy](https://www.eff.org/about/opportunities/volunteer
 
 This one is for maintainers of Rayhunter.
 
-1. Make a PR changing the versions in `Cargo.toml` and other files.
-   This can be done by running `scripts/set-versions.sh VERSION_NUM`.
+1. Make a PR changing the versions in `Cargo.toml` and other files. Either run
+   the [prepare release workflow](https://github.com/EFForg/rayhunter/actions/workflows/prepare-release.yml)
+   with the new version (it runs `scripts/set-versions.sh` and opens the PR), or
+   run `scripts/set-versions.sh VERSION_NUM` yourself and open the PR.
 
-2. Merge the PR, make a tag, and push the tag to GitHub. Pushing the tag should
-   trigger the [release workflow](https://github.com/EFForg/rayhunter/actions/workflows/release.yml).
+2. Merge the PR. The [tag release workflow](https://github.com/EFForg/rayhunter/actions/workflows/tag-release.yml)
+   notices the new version on `main` and runs the
+   [release workflow](https://github.com/EFForg/rayhunter/actions/workflows/release.yml),
+   which builds everything, then creates the `vX.Y.Z` tag and the GitHub release.
+   Pushing a `vX.Y.Z` tag by hand still triggers the release workflow too.
 
 3. Write changelog, edit it into the release, announce on mattermost.
