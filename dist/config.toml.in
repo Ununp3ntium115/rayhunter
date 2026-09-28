@@ -29,6 +29,13 @@ key_input_mode = 0
 # devices.  Default: false
 keep_screen_on = false
 
+# When true, the raw /dev/diag byte stream is served at GET /api/diag/stream so
+# other tooling can read DIAG while Rayhunter keeps running.
+# The stream contains unfiltered baseband traffic including your IMSI, and the
+# API has no authentication, so anyone who can reach the web UI can read it.
+# Default: false
+diag_stream_enabled = false
+
 # If set, attempts to send a notification to the url when a new warning is triggered
 # ntfy_url = "https://ntfy.sh/your-topic"
 # What notification types to enable. Does nothing if the above ntfy_url is not set.

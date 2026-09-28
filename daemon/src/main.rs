@@ -28,9 +28,9 @@ use crate::notifications::{NotificationService, run_notification_worker};
 use crate::pcap::get_pcap;
 use crate::qmdl_store::RecordingStore;
 use crate::server::{
-    ServerState, debug_set_display_state, get_all_zip, get_analyzers, get_config, get_qmdl,
-    get_time, get_wifi_status, get_zip, scan_wifi, serve_static, set_config, set_recording_label,
-    set_time_offset, test_notification,
+    ServerState, debug_set_display_state, get_all_zip, get_analyzers, get_config, get_diag_stream,
+    get_qmdl, get_time, get_wifi_status, get_zip, scan_wifi, serve_static, set_config,
+    set_recording_label, set_time_offset, test_notification,
 };
 use crate::stats::{get_qmdl_manifest, get_system_stats, get_update_status};
 use crate::update::{UpdateStatus, run_update_check_worker};
@@ -61,10 +61,14 @@ use tokio_util::task::TaskTracker;
 
 type AppRouter = Router<Arc<ServerState>>;
 
+/// How many raw /dev/diag reads a /api/diag/stream client may fall behind before it skips some.
+const DIAG_STREAM_BUFFER_READS: usize = 256;
+
 fn get_router() -> AppRouter {
     Router::new()
         .route("/api/pcap/{name}", get(get_pcap))
         .route("/api/qmdl/{name}", get(get_qmdl))
+        .route("/api/diag/stream", get(get_diag_stream))
         .route("/api/zip/{name}", get(get_zip))
         .route("/api/all.zip", get(get_all_zip))
         .route("/api/system-stats", get(get_system_stats))
@@ -217,6 +221,9 @@ async fn run_with_config(
     let (diag_tx, diag_rx) = mpsc::channel::<DiagDeviceCtrlMessage>(1);
     let (ui_update_tx, ui_update_rx) = mpsc::channel::<display::DisplayState>(1);
     let (analysis_tx, analysis_rx) = mpsc::channel::<AnalysisCtrlMessage>(5);
+    let diag_stream_tap = config
+        .diag_stream_enabled
+        .then(|| tokio::sync::broadcast::channel::<bytes::Bytes>(DIAG_STREAM_BUFFER_READS).0);
     let restart_token = CancellationToken::new();
     let shutdown_token = restart_token.child_token();
     // Ensure shutdown_token is cancelled when this function exits for any
@@ -247,6 +254,7 @@ async fn run_with_config(
             config.min_space_to_continue_recording_mb,
             config.gps_mode,
             gps_fixed_coords,
+            diag_stream_tap.clone(),
         );
         info!("Starting UI");
 
@@ -361,6 +369,7 @@ async fn run_with_config(
         wifi_scan_lock: tokio::sync::Mutex::new(()),
         gps_state: Arc::new(tokio::sync::RwLock::new(initial_gps)),
         update_status_lock: update_status_lock.clone(),
+        diag_stream_tap,
     });
     run_server(&task_tracker, state, shutdown_token.clone()).await;
 

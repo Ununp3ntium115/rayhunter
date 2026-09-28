@@ -50,6 +50,48 @@ pub struct ServerState {
     pub wifi_scan_lock: tokio::sync::Mutex<()>,
     pub gps_state: Arc<RwLock<Option<GpsData>>>,
     pub update_status_lock: Arc<RwLock<UpdateStatus>>,
+    /// Raw /dev/diag reads, present only when `diag_stream_enabled` is set.
+    pub diag_stream_tap: Option<tokio::sync::broadcast::Sender<bytes::Bytes>>,
+}
+
+#[cfg_attr(feature = "apidocs", utoipa::path(
+    get,
+    path = "/api/diag/stream",
+    tag = "Recordings",
+    responses(
+        (status = StatusCode::OK, description = "Raw /dev/diag reads, streamed as they arrive", content_type = "application/octet-stream"),
+        (status = StatusCode::SERVICE_UNAVAILABLE, description = "diag_stream_enabled is not set in the config")
+    ),
+    summary = "Stream raw DIAG bytes",
+    description = "Opt-in (diag_stream_enabled). Streams each raw read from /dev/diag, before parsing, so tools like QCSuper can consume DIAG while Rayhunter keeps recording. Each read is one complete messages container. A client that falls behind skips whole reads instead of slowing Rayhunter down."
+))]
+pub async fn get_diag_stream(
+    State(state): State<Arc<ServerState>>,
+) -> Result<Response, (StatusCode, String)> {
+    let tap = state.diag_stream_tap.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "diag streaming is disabled; set diag_stream_enabled = true in config.toml".to_string(),
+    ))?;
+    let headers = [(CONTENT_TYPE, "application/octet-stream")];
+    let body = Body::from_stream(diag_tap_stream(tap.subscribe()));
+    Ok((headers, body).into_response())
+}
+
+fn diag_tap_stream(
+    rx: tokio::sync::broadcast::Receiver<bytes::Bytes>,
+) -> impl futures::Stream<Item = Result<bytes::Bytes, std::convert::Infallible>> {
+    use tokio::sync::broadcast::error::RecvError;
+    futures::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(bytes) => return Some((Ok(bytes), rx)),
+                Err(RecvError::Lagged(skipped)) => {
+                    warn!("diag stream client fell behind, dropped {skipped} reads");
+                }
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    })
 }
 
 #[cfg_attr(feature = "apidocs", utoipa::path(
@@ -817,7 +859,46 @@ mod tests {
             wifi_scan_lock: tokio::sync::Mutex::new(()),
             gps_state: Arc::new(RwLock::new(None)),
             update_status_lock: Arc::new(RwLock::new(UpdateStatus::default())),
+            diag_stream_tap: None,
         })
+    }
+
+    #[tokio::test]
+    async fn test_diag_stream_disabled_returns_503() {
+        let (_temp_dir, store_lock) = create_test_qmdl_store().await;
+        let state = create_test_server_state(store_lock);
+        let err = get_diag_stream(State(state)).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_diag_stream_fans_out_raw_bytes() {
+        use futures::StreamExt;
+        let (tap, _) = tokio::sync::broadcast::channel::<bytes::Bytes>(4);
+        let mut a = pin!(diag_tap_stream(tap.subscribe()));
+        let mut b = pin!(diag_tap_stream(tap.subscribe()));
+        tap.send(bytes::Bytes::from_static(b"\x20\x00\x00\x00"))
+            .unwrap();
+        tap.send(bytes::Bytes::from_static(b"\x7e")).unwrap();
+        drop(tap);
+        let a: Vec<_> = a.by_ref().map(Result::unwrap).collect().await;
+        let b: Vec<_> = b.by_ref().map(Result::unwrap).collect().await;
+        assert_eq!(a, vec![&b"\x20\x00\x00\x00"[..], &b"\x7e"[..]]);
+        assert_eq!(a, b);
+    }
+
+    #[tokio::test]
+    async fn test_diag_stream_lagging_client_skips_reads() {
+        use futures::StreamExt;
+        let (tap, _) = tokio::sync::broadcast::channel::<bytes::Bytes>(2);
+        let stream = diag_tap_stream(tap.subscribe());
+        for i in 0..5u8 {
+            tap.send(bytes::Bytes::copy_from_slice(&[i])).unwrap();
+        }
+        drop(tap);
+        let got: Vec<_> = stream.map(Result::unwrap).collect().await;
+        // the oldest reads are dropped, the stream carries on with the newest ones
+        assert_eq!(got, vec![&[3u8][..], &[4u8][..]]);
     }
 
     // valid HDLC encapsulated diag message generated from

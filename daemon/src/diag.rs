@@ -481,6 +481,7 @@ pub fn run_diag_read_thread(
     min_space_to_continue_mb: u64,
     gps_mode: GpsMode,
     gps_fixed_coords: Option<(f64, f64)>,
+    diag_stream_tap: Option<tokio::sync::broadcast::Sender<bytes::Bytes>>,
 ) {
     task_tracker.spawn(async move {
         info!("Using configuration for device: {0:?}", device);
@@ -488,6 +489,10 @@ pub fn run_diag_read_thread(
             .await?;
         dev.config_logs()
             .await?;
+        if let Some(tap) = diag_stream_tap {
+            info!("Serving raw DIAG stream at /api/diag/stream");
+            dev.set_raw_tap(tap);
+        }
 
         let mut diag_stream = pin!(dev.as_stream().into_stream());
         let mut diag_task = DiagTask::new(

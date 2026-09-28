@@ -91,6 +91,7 @@ pub struct DiagDevice {
     file: File,
     read_buf: Vec<u8>,
     use_mdm: i32,
+    raw_tap: Option<tokio::sync::broadcast::Sender<bytes::Bytes>>,
 }
 
 impl DiagDevice {
@@ -154,7 +155,14 @@ impl DiagDevice {
             read_buf: vec![0; BUFFER_LEN],
             file: diag_file,
             use_mdm,
+            raw_tap: None,
         })
+    }
+
+    /// Copies every raw read from /dev/diag (before parsing) into `tap` while it has
+    /// subscribers. Slow subscribers miss frames rather than slowing down the reader.
+    pub fn set_raw_tap(&mut self, tap: tokio::sync::broadcast::Sender<bytes::Bytes>) {
+        self.raw_tap = Some(tap);
     }
 
     pub fn as_stream(
@@ -175,6 +183,13 @@ impl DiagDevice {
                 .read(&mut self.read_buf)
                 .await
                 .map_err(DiagDeviceError::DeviceReadFailed)?;
+        }
+
+        if let Some(tap) = &self.raw_tap
+            && tap.receiver_count() > 0
+        {
+            // only errors when every receiver has gone away in the meantime
+            let _ = tap.send(bytes::Bytes::copy_from_slice(&self.read_buf[0..bytes_read]));
         }
 
         debug!(

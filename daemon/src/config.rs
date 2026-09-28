@@ -112,6 +112,10 @@ pub struct Config {
     /// Orbic-only: prevent the screen from blanking by re-enabling the backlight whenever it
     /// goes to sleep. Has no effect on other devices.
     pub keep_screen_on: bool,
+    /// Serve the raw /dev/diag byte stream at GET /api/diag/stream so other tools can read DIAG
+    /// while Rayhunter keeps running. Off by default: the stream contains unfiltered baseband
+    /// traffic, including subscriber identifiers.
+    pub diag_stream_enabled: bool,
 }
 
 /// Configuration for uploading finished QMDL recordings to a WebDAV server.
@@ -176,6 +180,7 @@ impl Default for Config {
             dns_servers: None,
             webdav: WebdavConfig::default(),
             keep_screen_on: false,
+            diag_stream_enabled: false,
         }
     }
 }

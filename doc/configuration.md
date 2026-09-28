@@ -105,3 +105,15 @@ A few notes on behavior:
 - **Currently-recording entry:** the active recording is never uploaded; only closed entries are eligible.
 
 If you prefer editing `config.toml` file, you need to obtain a shell on your [Orbic](./orbic.md#obtaining-a-shell) or [TP-Link](./tplink-m7350.md#obtaining-a-shell) device and edit the file manually. You can view the [default configuration file on GitHub](https://github.com/EFForg/rayhunter/blob/main/dist/config.toml.in).
+
+## Raw DIAG Stream
+
+The Linux `/dev/diag` device only allows one reader at a time, so while Rayhunter is running, other DIAG tools such as [QCSuper](https://github.com/P1sec/QCSuper) fail with `EBUSY`. With `diag_stream_enabled = true` in `config.toml`, Rayhunter copies everything it reads from `/dev/diag` to `GET /api/diag/stream`, so you can capture it or feed it to your own tooling at the same time (tools that expect to open `/dev/diag` themselves need an adapter to read from HTTP):
+
+```sh
+curl -N http://192.168.1.1:8080/api/diag/stream > diag.bin
+```
+
+The response is `application/octet-stream` and never ends on its own. Each chunk is one raw read from `/dev/diag`, before Rayhunter parses it (one messages container holding HDLC-encoded DIAG frames). A client that falls behind skips whole reads rather than slowing Rayhunter down; the daemon logs a warning when that happens. When the option is off (the default) the endpoint returns `503 Service Unavailable`. Nothing is streamed in `debug_mode`, since DIAG isn't read then.
+
+**Privacy:** the stream is unfiltered baseband traffic, including your IMSI and the identifiers of cells you connect to. The web API has no authentication, so anyone who can reach Rayhunter's web UI (for example, anyone on its WiFi hotspot) can read it while it is enabled. Only enable it while you need it.
