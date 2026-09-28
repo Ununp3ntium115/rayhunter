@@ -57,7 +57,11 @@
                                 }[event.event_type]}
                                 <tr class="even:bg-gray-200 odd:bg-white">
                                     <td class="p-2">{date_formatter.format(parsed_date)}</td>
-                                    <td class="p-2">{analyzer.name} v{analyzer.version}</td>
+                                    <td class="p-2"
+                                        >{analyzer
+                                            ? `${analyzer.name} v${analyzer.version}`
+                                            : 'Unknown analyzer'}</td
+                                    >
                                     <td class="p-2">{event.message}</td>
                                     <td class="p-2 {event_type_class} text-center"
                                         >{event.event_type}</td

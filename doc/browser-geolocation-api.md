@@ -118,3 +118,7 @@ If you need continuous location tracking, consider alternative approaches:
 - Ensure GPS is enabled on your device
 - Move to an open area with clear sky view
 - Retry with `enableHighAccuracy: true` (currently always on)
+
+## Plain HTTP
+
+Rayhunter serves its UI over plain `http://`, which browsers do not treat as a secure context, so `navigator.geolocation` is unavailable. The "Fill from Browser Location" button is disabled in that case and the coordinate fields stay editable. Use `localhost` (for example via port forwarding) or HTTPS to enable it.

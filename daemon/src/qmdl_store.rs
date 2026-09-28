@@ -435,10 +435,15 @@ impl RecordingStore {
             .await
             .map_err(RecordingStoreError::WriteManifestError)?;
 
-        let manifest_contents =
-            toml::to_string_pretty(&self.manifest).expect("failed to serialize manifest");
+        let manifest_contents = toml::to_string_pretty(&self.manifest)
+            .map_err(|e| RecordingStoreError::WriteManifestError(io::Error::other(e)))?;
         manifest_tmp_file
             .write_all(manifest_contents.as_bytes())
+            .await
+            .map_err(RecordingStoreError::WriteManifestError)?;
+        // Without this, a power loss after the rename can leave an empty manifest on flash.
+        manifest_tmp_file
+            .sync_all()
             .await
             .map_err(RecordingStoreError::WriteManifestError)?;
 
