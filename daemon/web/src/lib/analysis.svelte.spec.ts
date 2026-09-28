@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AnalysisRowType, parse_finished_report } from './analysis.svelte';
+import { AnalysisRowType, outdated_analyzers, parse_finished_report } from './analysis.svelte';
 import { type NewlineDeliminatedJson } from './ndjson';
 
 const SAMPLE_V2_REPORT_NDJSON: NewlineDeliminatedJson = [
@@ -150,5 +150,28 @@ describe('analysis report parsing', () => {
         expect(report.statistics.num_medium).toEqual(0);
         expect(report.statistics.num_high).toEqual(0);
         expect(report.statistics.num_skipped_packets).toEqual(1);
+    });
+});
+
+describe('outdated_analyzers', () => {
+    const analyzer = (name: string, version: number) => ({ name, description: '', version });
+
+    it('lists analyzers with a newer current version', () => {
+        const report = [analyzer('IMSI Requested', 3), analyzer('Null Cipher', 2)];
+        const current = [analyzer('IMSI Requested', 6), analyzer('Null Cipher', 2)];
+        expect(outdated_analyzers(report, current)).toEqual([
+            { name: 'IMSI Requested', report_version: 3, current_version: 6 },
+        ]);
+    });
+
+    it('ignores analyzers that were removed or renamed', () => {
+        expect(outdated_analyzers([analyzer('Old Heuristic', 1)], [analyzer('New', 1)])).toEqual(
+            []
+        );
+    });
+
+    it('reports nothing when the report is current', () => {
+        const same = [analyzer('A', 2)];
+        expect(outdated_analyzers(same, same)).toEqual([]);
     });
 });
