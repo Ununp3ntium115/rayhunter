@@ -20,6 +20,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Validate version
         run: |
           if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -37,6 +39,8 @@ jobs:
           branch="release/v$VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # credentials aren't persisted by checkout; let git use GH_TOKEN via gh for this push only
+          gh auth setup-git
           git switch -c "$branch"
           git commit -am "Release v$VERSION"
           git push origin "$branch"
