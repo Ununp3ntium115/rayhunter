@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
 use clap::Parser;
 use log::{debug, error, info, warn};
+use pcap_file_tokio::DataLink;
 use pcap_file_tokio::pcap::PcapReader;
 use pcap_file_tokio::pcapng::blocks::enhanced_packet::EnhancedPacketBlock;
 use pcap_file_tokio::pcapng::{Block, PcapNgReader};
@@ -122,6 +123,8 @@ async fn analyze_pcap(
         .await
         .context("failed to read PCAP file")?;
     let mut report = Report::new(pcap_path);
+    // link type of each interface, indexed by interface_id
+    let mut linktypes = Vec::new();
     while let Some(block_result) = pcap_reader.next_block().await {
         let block = match block_result {
             Ok(b) => b,
@@ -131,7 +134,17 @@ async fn analyze_pcap(
             }
         };
         let row = match block {
-            Block::EnhancedPacket(packet) => harness.analyze_pcap_packet(packet),
+            Block::InterfaceDescription(interface) => {
+                linktypes.push(interface.linktype);
+                continue;
+            }
+            Block::EnhancedPacket(packet) => {
+                let linktype = linktypes
+                    .get(packet.interface_id as usize)
+                    .copied()
+                    .unwrap_or(DataLink::IPV4);
+                harness.analyze_pcap_packet_with_linktype(packet, linktype)
+            }
             other => {
                 debug!("{pcap_path}: skipping pcap packet {other:?}");
                 continue;
@@ -160,6 +173,7 @@ async fn analyze_classic_pcap(
     let mut reader = PcapReader::new(pcap_file)
         .await
         .context("failed to read PCAP file")?;
+    let linktype = reader.header().datalink;
     let mut report = Report::new(pcap_path);
     while let Some(pkt_result) = reader.next_packet().await {
         let pkt = match pkt_result {
@@ -176,7 +190,7 @@ async fn analyze_classic_pcap(
             data: pkt.data,
             options: vec![],
         };
-        report.process_row(harness.analyze_pcap_packet(block));
+        report.process_row(harness.analyze_pcap_packet_with_linktype(block, linktype));
     }
     report.print_summary(show_skipped);
     if let Some(writer) = json_writer {
