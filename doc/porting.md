@@ -123,7 +123,7 @@ If your device has LEDs instead of a display, take a look at `daemon/src/display
 
 Rayhunter can use the power button to restart recordings via a double-tap gesture. The implementation is in [`daemon/src/key_input.rs`](https://github.com/EFForg/rayhunter/blob/main/daemon/src/key_input.rs). It currently has no structure for device-specific implementations, as all devices we support expose the same input event interface.
 
-The `key_input_mode` setting in `config.toml` controls this feature (`0` = disabled, `1` = double-tap power button to start/stop recordings).
+The `key_input_mode` setting in `config.toml` controls this feature (`0` = disabled, `1` = double-tap power button to start/stop recordings, `2` = additionally triple-tap to toggle the WiFi hotspot, Orbic only).
 
 ## Writing the installer, and contributing official support
 

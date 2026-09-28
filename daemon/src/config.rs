@@ -52,6 +52,9 @@ pub enum ClockSyncMode {
 pub enum KeyInputMode {
     Disabled = 0,
     DoubleTapPower = 1,
+    /// Double-tap starts a new recording; triple-tap toggles the WiFi hotspot and reboots.
+    /// Orbic only: other devices treat this like `DoubleTapPower`.
+    DoubleTapPowerTripleTapWifi = 2,
 }
 use crate::notifications::NotificationType;
 

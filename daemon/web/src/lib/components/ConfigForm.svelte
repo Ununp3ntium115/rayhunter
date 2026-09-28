@@ -235,6 +235,12 @@
                     >
                         <option value={0}>Disable button control</option>
                         <option value={1}>Double-tap power button to start new recording</option>
+                        {#if config.device === 'orbic'}
+                            <option value={2}>
+                                Double-tap for new recording, triple-tap to toggle WiFi hotspot
+                                (reboots)
+                            </option>
+                        {/if}
                     </select>
                 </FormField>
 
