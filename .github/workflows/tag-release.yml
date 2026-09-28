@@ -9,6 +9,8 @@ on:
 
 jobs:
   check_new_version:
+    # Forks build releases locally (scripts/release-local.sh); they have no Pages site or tags.
+    if: github.repository == 'EFForg/rayhunter'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,9 +22,17 @@ jobs:
         with:
           persist-credentials: false
       - id: version
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
           version=$(grep ^version lib/Cargo.toml | cut -d' ' -f3 | tr -d '"')
-          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          # lib/Cargo.toml changes for dependency bumps too; only a changed version is a release
+          git fetch -q --depth=1 origin "$BEFORE" 2> /dev/null || true
+          previous=$(git show "$BEFORE:lib/Cargo.toml" 2> /dev/null | grep ^version | cut -d' ' -f3 | tr -d '"')
+          if [ "$version" = "$previous" ]; then
+            echo "version $version unchanged, not releasing"
+            is_new=false
+          elif ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "version $version is not X.Y.Z, not releasing"
             is_new=false
           elif git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}" "refs/tags/v$version" > /dev/null; then
