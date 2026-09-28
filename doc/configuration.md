@@ -14,6 +14,7 @@ Through web UI you can set:
 - **Device Input Mode**, which defines behavior of built-in power button of the device. *Device Input Mode* could be:
   - *Disable button control*: built-in power button of the device is not used by Rayhunter.
   - *Double-tap power button to start new recording*: double clicking on a built-in power button of the device stops and immediately restarts the recording. This could be useful if Rayhunter's heuristics is triggered and you get the red line, and you want to "reset" the past warnings. Normally you can do that through web UI, but sometimes it is easier to double tap on power button.
+  - *Double-tap for new recording, triple-tap to toggle WiFi hotspot* (Orbic RC400L only): double-tapping works as above, but waits a moment to see whether a third tap follows. Triple-tapping the power button turns the device's WiFi hotspot off (or back on) and reboots the device, since the Orbic only reads this setting at boot. The current recording is stopped first. This is the same change as [disabling the hotspot from a shell](./faq.md#how-do-i-disable-the-wifi-hotspot-on-the-orbic-rc400l). With the hotspot off, the web UI can't be reached over the hotspot; this may also stop Rayhunter's WiFi client mode, so make sure you can still reach the device (for example over USB) or triple-tap again to turn it back on.
 - **Colorblind Mode** enables color blind mode (blue line is shown instead of green line, red line remains red). Please note that this does not cover all types of color blindness, but switching green to blue should be about enough to differentiate the color change for most types of color blindness.
 - **Keep Screen On** (Orbic RC400L only) prevents the device display from blanking while Rayhunter is running. When enabled, a background watchdog polls the backlight state once per second and re-enables it whenever the screen goes to sleep. This option has no effect on other devices. Note: unverified on hardware at time of writing; firmware revision tested against: unknown.
 - **Clock Sync** controls what happens when Rayhunter's clock drifts from the clock of the browser you're viewing the web UI with. Some devices have no battery-backed real-time clock, so they lose the time whenever they reboot, and an incorrect clock means incorrect timestamps on your recordings. The modes are:
@@ -104,3 +105,15 @@ A few notes on behavior:
 - **Currently-recording entry:** the active recording is never uploaded; only closed entries are eligible.
 
 If you prefer editing `config.toml` file, you need to obtain a shell on your [Orbic](./orbic.md#obtaining-a-shell) or [TP-Link](./tplink-m7350.md#obtaining-a-shell) device and edit the file manually. You can view the [default configuration file on GitHub](https://github.com/EFForg/rayhunter/blob/main/dist/config.toml.in).
+
+## Raw DIAG Stream
+
+The Linux `/dev/diag` device only allows one reader at a time, so while Rayhunter is running, other DIAG tools such as [QCSuper](https://github.com/P1sec/QCSuper) fail with `EBUSY`. With `diag_stream_enabled = true` in `config.toml`, Rayhunter copies everything it reads from `/dev/diag` to `GET /api/diag/stream`, so you can capture it or feed it to your own tooling at the same time (tools that expect to open `/dev/diag` themselves need an adapter to read from HTTP):
+
+```sh
+curl -N http://192.168.1.1:8080/api/diag/stream > diag.bin
+```
+
+The response is `application/octet-stream` and never ends on its own. Each chunk is one raw read from `/dev/diag`, before Rayhunter parses it (one messages container holding HDLC-encoded DIAG frames). A client that falls behind skips whole reads rather than slowing Rayhunter down; the daemon logs a warning when that happens. When the option is off (the default) the endpoint returns `503 Service Unavailable`. Nothing is streamed in `debug_mode`, since DIAG isn't read then.
+
+**Privacy:** the stream is unfiltered baseband traffic, including your IMSI and the identifiers of cells you connect to. The web API has no authentication, so anyone who can reach Rayhunter's web UI (for example, anyone on its WiFi hotspot) can read it while it is enabled. Only enable it while you need it.

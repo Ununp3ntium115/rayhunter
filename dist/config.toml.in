@@ -21,12 +21,20 @@ ui_level = 1
 
 # 0 = rayhunter does not read button presses
 # 1 = double-tapping the power button starts new recording
+# 2 = (Orbic only) like 1, and triple-tapping toggles the WiFi hotspot on/off and reboots
 key_input_mode = 0
 
 # Orbic RC400L only: when true, a background watchdog re-enables the backlight
 # once per second whenever the screen goes to sleep.  Has no effect on other
 # devices.  Default: false
 keep_screen_on = false
+
+# When true, the raw /dev/diag byte stream is served at GET /api/diag/stream so
+# other tooling can read DIAG while Rayhunter keeps running.
+# The stream contains unfiltered baseband traffic including your IMSI, and the
+# API has no authentication, so anyone who can reach the web UI can read it.
+# Default: false
+diag_stream_enabled = false
 
 # If set, attempts to send a notification to the url when a new warning is triggered
 # ntfy_url = "https://ntfy.sh/your-topic"

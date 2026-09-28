@@ -4666,6 +4666,7 @@ dependencies = [
  "async-trait",
  "async_zip",
  "axum",
+ "bytes",
  "chrono",
  "futures",
  "futures-macro",

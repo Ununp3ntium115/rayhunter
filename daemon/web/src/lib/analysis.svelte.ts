@@ -178,3 +178,30 @@ export async function get_report(name: string): Promise<AnalysisReport> {
     const report_json = parse_ndjson(await req('GET', `/api/analysis-report/${name}`));
     return parse_finished_report(report_json);
 }
+
+export type OutdatedAnalyzer = {
+    name: string;
+    report_version: number;
+    current_version: number;
+};
+
+// Analyzers whose heuristic has a newer version than the one that produced this report.
+// Matched by name, since reports written by older versions don't include the config key.
+export function outdated_analyzers(
+    report: AnalyzerMetadata[],
+    current: AnalyzerMetadata[]
+): OutdatedAnalyzer[] {
+    const current_versions = new Map(current.map((a) => [a.name, a.version]));
+    const outdated: OutdatedAnalyzer[] = [];
+    for (const analyzer of report) {
+        const current_version = current_versions.get(analyzer.name);
+        if (current_version !== undefined && current_version > analyzer.version) {
+            outdated.push({
+                name: analyzer.name,
+                report_version: analyzer.version,
+                current_version,
+            });
+        }
+    }
+    return outdated;
+}

@@ -11,6 +11,10 @@ LIBNL_VERSION="3.11.0"
 LIBNL_URL="https://github.com/thom311/libnl/releases/download/libnl${LIBNL_VERSION//\./_}/libnl-${LIBNL_VERSION}.tar.gz"
 IW_VERSION="6.9"
 IW_URL="https://www.kernel.org/pub/software/network/iw/iw-${IW_VERSION}.tar.xz"
+# Fallbacks: Ubuntu's archive carries the unmodified upstream sources as .orig tarballs,
+# used when w1.fi / kernel.org are unreachable (e.g. from a restricted CI network).
+WPA_MIRROR_URL="http://archive.ubuntu.com/ubuntu/pool/main/w/wpa/wpa_${WPA_VERSION}.orig.tar.xz"
+IW_MIRROR_URL="http://archive.ubuntu.com/ubuntu/pool/main/i/iw/iw_${IW_VERSION}.orig.tar.xz"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="$SCRIPT_DIR/../tools/build-wpa-supplicant/out"
@@ -45,8 +49,13 @@ make install
 
 echo "Building wpa_supplicant ${WPA_VERSION}..."
 cd "$BUILD_DIR"
-curl -Lf "$WPA_URL" | tar xz
-cd "wpa_supplicant-${WPA_VERSION}/wpa_supplicant"
+if curl -Lf "$WPA_URL" | tar xz; then
+    cd "wpa_supplicant-${WPA_VERSION}/wpa_supplicant"
+else
+    echo "Falling back to $WPA_MIRROR_URL"
+    curl -Lf "$WPA_MIRROR_URL" | tar xJ
+    cd "wpa-${WPA_VERSION}/wpa_supplicant"
+fi
 
 cat > .config <<'WPACONF'
 CONFIG_DRIVER_NL80211=y
@@ -77,7 +86,10 @@ cp wpa_supplicant wpa_cli "$OUT_DIR/"
 
 echo "Building iw ${IW_VERSION}..."
 cd "$BUILD_DIR"
-curl -Lf "$IW_URL" | tar xJ
+curl -Lf "$IW_URL" | tar xJ || {
+    echo "Falling back to $IW_MIRROR_URL"
+    curl -Lf "$IW_MIRROR_URL" | tar xJ
+}
 cd "iw-${IW_VERSION}"
 PKG_CONFIG_LIBDIR="$SYSROOT/lib/pkgconfig" \
 make CC="$CC" \

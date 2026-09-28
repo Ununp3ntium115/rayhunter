@@ -50,6 +50,13 @@ echo 9 > /usrdata/mode.cfg
 reboot
 ```
 
+If ADB is still enabled from the `orbic-usb` install, you can instead run it
+from your computer in one step:
+
+```sh
+./installer util shell "echo 9 > /usrdata/mode.cfg && reboot"
+```
+
 Make sure USB tethering is also enabled in the Orbic's UI.
 
 To disable tethering again:
@@ -61,6 +68,17 @@ reboot
 ```
 
 See `/data/usb/boot_hsusb_composition` for a list of USB modes and Android USB gadget settings.
+
+### How do I switch from the `orbic-usb` installer to the network installer?
+
+`./installer orbic` talks to the device over the network, so it can only work
+when your computer can reach the Orbic's admin page (usually
+`http://192.168.1.1`). After an `orbic-usb` install, USB tethering is
+disabled, so `./installer orbic` will time out with "Failed to get login
+info" while you are only connected over USB. Either:
+
+- connect your computer to the Orbic's WiFi hotspot and run `./installer orbic --admin-password '<password>'`, or
+- re-enable USB tethering as described [above](#how-do-i-re-enable-usb-tethering-after-installing-rayhunter), then run the network installer over USB.
 
 ### How do I connect my device to an existing WiFi network?
 

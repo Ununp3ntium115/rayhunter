@@ -1,0 +1,50 @@
+# Opens a pull request that bumps every crate to the given version.
+# Merging it triggers tag-release.yml, which builds and publishes the release.
+name: Prepare release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.14.0 (no leading v)"
+        required: true
+        type: string
+
+jobs:
+  bump_versions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate version
+        run: |
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "version must look like 1.2.3, got '$VERSION'"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null; then
+            echo "tag v$VERSION already exists"
+            exit 1
+          fi
+      - name: Bump versions
+        run: ./scripts/set-versions.sh "$VERSION"
+      - name: Open pull request
+        run: |
+          branch="release/v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # credentials aren't persisted by checkout; let git use GH_TOKEN via gh for this push only
+          gh auth setup-git
+          git switch -c "$branch"
+          git commit -am "Release v$VERSION"
+          git push origin "$branch"
+          # PRs opened with GITHUB_TOKEN don't trigger pull_request workflows; CI runs again in
+          # full on merge (tag-release.yml -> release.yml -> main.yml) before anything is published.
+          gh pr create --base main --head "$branch" --title "Release v$VERSION" \
+            --body "Bumps all crates to $VERSION. Merging this creates the v$VERSION tag and GitHub release (tag-release.yml)."

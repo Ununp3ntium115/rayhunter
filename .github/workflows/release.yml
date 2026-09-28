@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_call:  # called by tag-release.yml when a version bump lands on main
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -50,4 +51,6 @@ jobs:
       - name: Create release
         run: |
           version=$(grep ^version lib/Cargo.toml | cut -d' ' -f3 | tr -d '"')
-          gh release create --generate-notes -t "Rayhunter v$version" "v$version" rayhunter-v${version}-*/rayhunter-v${version}*.zi*
+          # --target only matters when the tag doesn't exist yet (tag-release.yml); it pins the
+          # new tag to the commit that was built rather than whatever main points to by now.
+          gh release create --generate-notes --target "$GITHUB_SHA" -t "Rayhunter v$version" "v$version" rayhunter-v${version}-*/rayhunter-v${version}*.zi*

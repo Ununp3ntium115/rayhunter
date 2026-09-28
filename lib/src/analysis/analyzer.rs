@@ -505,7 +505,18 @@ impl Harness {
         self.analyzers.push(analyzer);
     }
 
+    /// Analyzes a packet from a pcap written by Rayhunter (raw IPv4 link type).
     pub fn analyze_pcap_packet(&mut self, packet: EnhancedPacketBlock) -> AnalysisRow {
+        self.analyze_pcap_packet_with_linktype(packet, pcap_file_tokio::DataLink::IPV4)
+    }
+
+    /// Analyzes a packet from a pcap whose interface has the given link type, e.g. Ethernet
+    /// for pcaps written by SCAT.
+    pub fn analyze_pcap_packet_with_linktype(
+        &mut self,
+        packet: EnhancedPacketBlock,
+        linktype: pcap_file_tokio::DataLink,
+    ) -> AnalysisRow {
         self.packet_num += 1;
 
         let packet_timestamp = *GPS_EPOCH + packet.timestamp;
@@ -514,8 +525,15 @@ impl Harness {
             skipped_message_reason: None,
             events: Vec::new(),
         };
-        let gsmtap_offset = 20 + 8;
-        let gsmtap_data = &packet.data[gsmtap_offset..];
+        let gsmtap_data = match crate::pcap::find_gsmtap(&packet.data, linktype) {
+            Ok(data) => data,
+            Err(err) => {
+                row.skipped_message_reason = Some(format!("failed to find GSMTAP data: {err}"));
+                row.events = self.report_skipped_packet(packet_timestamp);
+                self.assert_events_match_analyzers(&row.events);
+                return row;
+            }
+        };
         // the type and subtype are at byte offsets 3 and 13, respectively
         let gsmtap_header = match GsmtapType::new(gsmtap_data[2], gsmtap_data[12]) {
             Ok(gsmtap_type) => GsmtapHeader::new(gsmtap_type),
@@ -526,8 +544,8 @@ impl Harness {
                 return row;
             }
         };
-        let packet_offset = gsmtap_offset + 16;
-        let packet_data = &packet.data[packet_offset..];
+        // header length is in 32-bit words; find_gsmtap checked it fits
+        let packet_data = &gsmtap_data[usize::from(gsmtap_data[1]) * 4..];
         let gsmtap_message = GsmtapMessage {
             header: gsmtap_header,
             payload: packet_data.to_vec(),

@@ -33,6 +33,7 @@ use utoipa::OpenApi;
     paths(
         pcap::get_pcap,
         server::get_qmdl,
+        server::get_diag_stream,
         server::get_zip,
         server::get_all_zip,
         stats::get_system_stats,

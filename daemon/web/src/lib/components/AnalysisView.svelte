@@ -1,7 +1,11 @@
 <script lang="ts">
-    import { type ReportMetadata } from '$lib/analysis.svelte';
+    import {
+        type AnalyzerMetadata,
+        type ReportMetadata,
+        outdated_analyzers,
+    } from '$lib/analysis.svelte';
     import type { ManifestEntry } from '$lib/manifest.svelte';
-    import { gps_mode_label } from '$lib/utils.svelte';
+    import { get_analyzers, gps_mode_label } from '$lib/utils.svelte';
     import { AnalysisManager } from '$lib/analysisManager.svelte';
     import AnalysisTable from './AnalysisTable.svelte';
     import ReAnalyzeButton from './ReAnalyzeButton.svelte';
@@ -14,6 +18,15 @@
         manager: AnalysisManager;
         current: boolean;
     } = $props();
+
+    let current_analyzers: AnalyzerMetadata[] = $state([]);
+    $effect(() => {
+        get_analyzers()
+            .then((analyzers) => (current_analyzers = analyzers))
+            .catch(() => {
+                // without the current versions we just don't show the outdated notice
+            });
+    });
 
     const date_formatter = new Intl.DateTimeFormat(undefined, {
         timeStyle: 'long',
@@ -29,6 +42,10 @@
     {:else}
         {@const metadata: ReportMetadata = entry.analysis_report.metadata}
         {@const numWarnings: number = entry.get_num_warnings() || 0}
+        {@const outdated =
+            !current && metadata?.analyzers
+                ? outdated_analyzers(metadata.analyzers, current_analyzers)
+                : []}
         <div class="flex flex-col gap-2">
             {#if !!numWarnings || !current}
                 <div class="flex flex-row justify-between items-center">
@@ -48,6 +65,13 @@
                     {#if !current}
                         <ReAnalyzeButton {entry} {manager} />
                     {/if}
+                </div>
+            {/if}
+            {#if outdated.length > 0}
+                <div class="border border-yellow-500 rounded-lg text-yellow-800 px-2 py-1">
+                    This analysis was made with older versions of some heuristics ({outdated
+                        .map((a) => `${a.name} v${a.report_version} → v${a.current_version}`)
+                        .join(', ')}). Re-analyze this recording to apply the current heuristics.
                 </div>
             {/if}
             {#if entry.analysis_report.rows.length > 0}

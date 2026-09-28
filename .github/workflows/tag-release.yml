@@ -1,0 +1,47 @@
+# Releases automatically when a version bump lands on main: if the version in lib/Cargo.toml
+# has no vX.Y.Z tag yet, run the release workflow, which builds everything and creates the tag
+# and GitHub release. See "Making releases" in CONTRIBUTING.md.
+name: Tag release
+on:
+  push:
+    branches: [ main ]
+    paths: [ lib/Cargo.toml ]
+
+jobs:
+  check_new_version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_new: ${{ steps.version.outputs.is_new }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: version
+        run: |
+          version=$(grep ^version lib/Cargo.toml | cut -d' ' -f3 | tr -d '"')
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "version $version is not X.Y.Z, not releasing"
+            is_new=false
+          elif git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}" "refs/tags/v$version" > /dev/null; then
+            echo "tag v$version already exists, not releasing"
+            is_new=false
+          else
+            echo "releasing new version v$version"
+            is_new=true
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "is_new=$is_new" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: check_new_version
+    if: needs.check_new_version.outputs.is_new == 'true'
+    # A tag pushed with GITHUB_TOKEN would not trigger release.yml, so call it directly.
+    permissions:
+      contents: write
+      id-token: write
+      packages: write
+      pages: write
+    uses: ./.github/workflows/release.yml

@@ -111,15 +111,30 @@ pub async fn install(reset_config: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn shell() -> Result<()> {
-    println!(
-        "WARNING: The orbic USB installer is not recommended for most usecases. Consider using ./installer util orbic-shell instead, unless you want ADB access for other purposes."
-    );
+/// Opens an interactive ADB shell, or runs `command` as root if it is non-empty.
+pub async fn shell(command: &[String]) -> Result<()> {
+    if command.is_empty() {
+        println!(
+            "WARNING: The orbic USB installer is not recommended for most usecases. Consider using ./installer util orbic-shell instead, unless you want ADB access for other purposes."
+        );
+        println!("opening shell");
+    }
 
-    println!("opening shell");
     let mut adb_device = get_adb().await?;
-    adb_device.shell(&mut std::io::stdin(), Box::new(std::io::stdout()))?;
+    if command.is_empty() {
+        adb_device.shell(&mut std::io::stdin(), Box::new(std::io::stdout()))?;
+    } else {
+        let command = rootshell_command(&command.join(" "));
+        let output = adb_command(&mut adb_device, &["/bin/rootshell", "-c", &command])?;
+        print!("{output}");
+    }
     Ok(())
+}
+
+/// Single-quotes `command` so the ADB shell passes it unchanged to `rootshell -c`, which then
+/// runs it (including redirects like `> /usrdata/mode.cfg`) as root.
+fn rootshell_command(command: &str) -> String {
+    format!("'{}'", command.replace('\'', r"'\''"))
 }
 
 async fn force_debug_mode() -> Result<ADBUSBDevice> {
@@ -609,6 +624,18 @@ fn is_orbic_usb_vendor(vendor_id: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rootshell_command_single_quotes() {
+        assert_eq!(
+            super::rootshell_command("echo 3 > /usrdata/mode.cfg"),
+            "'echo 3 > /usrdata/mode.cfg'"
+        );
+        assert_eq!(
+            super::rootshell_command("echo 'a b'"),
+            r"'echo '\''a b'\'''"
+        );
+    }
+
     use super::{SerialResponseStatus, is_orbic_usb_vendor, serial_response_status};
 
     #[test]
