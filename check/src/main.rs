@@ -10,7 +10,7 @@ use rayhunter::{
     DeviceMetadata,
     analysis::analyzer::{AnalysisRow, AnalyzerConfig, Event, EventType, Harness},
     gsmtap::parser as gsmtap_parser,
-    pcap::GsmtapPcapWriter,
+    pcap::{self, GsmtapPcapWriter},
     qmdl::QmdlMessageReader,
 };
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,12 @@ struct Args {
 
     #[arg(short, long, help = "Show debug messages")]
     debug: bool,
+
+    #[arg(
+        long,
+        help = "Enable every analyzer (except the test analyzer), including those disabled by default"
+    )]
+    all_analyzers: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -112,19 +118,19 @@ impl Report {
 }
 
 async fn analyze_pcap(
+    config: &AnalyzerConfig,
     pcap_path: &str,
     show_skipped: bool,
     json_writer: Option<&mut IncrementalJsonWriter<File>>,
 ) -> Result<()> {
-    let mut harness =
-        Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
+    let mut harness = Harness::new_with_config(config, &DeviceMetadata::default());
     let pcap_file = &mut File::open(pcap_path).await.context("failed to open file")?;
     let mut pcap_reader = PcapNgReader::new(pcap_file)
         .await
         .context("failed to read PCAP file")?;
     let mut report = Report::new(pcap_path);
-    // link type of each interface, indexed by interface_id
-    let mut linktypes = Vec::new();
+    // link type and timestamp resolution of each interface, indexed by interface_id
+    let mut interfaces = Vec::new();
     while let Some(block_result) = pcap_reader.next_block().await {
         let block = match block_result {
             Ok(b) => b,
@@ -134,15 +140,21 @@ async fn analyze_pcap(
             }
         };
         let row = match block {
-            Block::InterfaceDescription(interface) => {
-                linktypes.push(interface.linktype);
+            // interface ids restart at 0 in each section
+            Block::SectionHeader(_) => {
+                interfaces.clear();
                 continue;
             }
-            Block::EnhancedPacket(packet) => {
-                let linktype = linktypes
+            Block::InterfaceDescription(interface) => {
+                interfaces.push((interface.linktype, pcap::if_tsresol(&interface)));
+                continue;
+            }
+            Block::EnhancedPacket(mut packet) => {
+                let (linktype, tsresol) = interfaces
                     .get(packet.interface_id as usize)
                     .copied()
-                    .unwrap_or(DataLink::IPV4);
+                    .unwrap_or((DataLink::IPV4, None));
+                packet.timestamp = pcap::pcapng_timestamp(packet.timestamp, tsresol);
                 harness.analyze_pcap_packet_with_linktype(packet, linktype)
             }
             other => {
@@ -163,12 +175,12 @@ async fn analyze_pcap(
 }
 
 async fn analyze_classic_pcap(
+    config: &AnalyzerConfig,
     pcap_path: &str,
     show_skipped: bool,
     json_writer: Option<&mut IncrementalJsonWriter<File>>,
 ) -> Result<()> {
-    let mut harness =
-        Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
+    let mut harness = Harness::new_with_config(config, &DeviceMetadata::default());
     let pcap_file = File::open(pcap_path).await.context("failed to open file")?;
     let mut reader = PcapReader::new(pcap_file)
         .await
@@ -203,12 +215,12 @@ async fn analyze_classic_pcap(
 }
 
 async fn analyze_qmdl(
+    config: &AnalyzerConfig,
     qmdl_path: &str,
     show_skipped: bool,
     json_writer: Option<&mut IncrementalJsonWriter<File>>,
 ) -> Result<()> {
-    let mut harness =
-        Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
+    let mut harness = Harness::new_with_config(config, &DeviceMetadata::default());
     let qmdl_file = &mut File::open(qmdl_path).await.context("failed to open file")?;
     let mut qmdl_reader = QmdlMessageReader::new(qmdl_file)
         .await
@@ -284,7 +296,12 @@ async fn main() {
     };
     rayhunter::init_logging(level);
 
-    let harness = Harness::new_with_config(&AnalyzerConfig::default(), &DeviceMetadata::default());
+    let config = if args.all_analyzers {
+        AnalyzerConfig::all_enabled()
+    } else {
+        AnalyzerConfig::default()
+    };
+    let harness = Harness::new_with_config(&config, &DeviceMetadata::default());
     let metadata = harness.get_metadata();
     info!("Analyzers:");
     for analyzer in &metadata.analyzers {
@@ -333,7 +350,9 @@ async fn main() {
         let path_str = path_str.as_ref();
         if name_str.ends_with(".qmdl") || name_str.ends_with(".qmdl.gz") {
             info!("**** Beginning analysis of {name_str}");
-            if let Err(e) = analyze_qmdl(path_str, args.show_skipped, json_writer.as_mut()).await {
+            if let Err(e) =
+                analyze_qmdl(&config, path_str, args.show_skipped, json_writer.as_mut()).await
+            {
                 error!("{path_str}: {e}");
             }
             analyzed_qmdl_stems.insert(qmdl_base_path(path));
@@ -356,7 +375,9 @@ async fn main() {
                 continue;
             }
             info!("**** Beginning analysis of {name_str}");
-            if let Err(e) = analyze_pcap(path_str, args.show_skipped, json_writer.as_mut()).await {
+            if let Err(e) =
+                analyze_pcap(&config, path_str, args.show_skipped, json_writer.as_mut()).await
+            {
                 error!("{path_str}: {e}");
             }
         } else if name_str.ends_with(".pcap") {
@@ -367,7 +388,8 @@ async fn main() {
             }
             info!("**** Beginning analysis of {name_str}");
             if let Err(e) =
-                analyze_classic_pcap(path_str, args.show_skipped, json_writer.as_mut()).await
+                analyze_classic_pcap(&config, path_str, args.show_skipped, json_writer.as_mut())
+                    .await
             {
                 error!("{path_str}: {e}");
             }

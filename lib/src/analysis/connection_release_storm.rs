@@ -10,10 +10,6 @@ use telcom_parser::lte_rrc::{
 pub struct ConnectionReleaseStormAnalyzer {
     /// Time-windowed queue of RRCConnectionRelease timestamps with cause=other (300-second window)
     release_timestamps: VecDeque<DateTime<FixedOffset>>,
-    /// Last release timestamp, used to track consecutive releases
-    last_release_timestamp: Option<DateTime<FixedOffset>>,
-    /// Count of consecutive releases (reset after >10s gap)
-    consecutive_release_count: usize,
     /// Timestamp of last HIGH alert to prevent rapid re-firing
     last_high_alert_timestamp: Option<DateTime<FixedOffset>>,
     /// Flag to ensure MEDIUM alert fires only once per recording
@@ -30,8 +26,6 @@ impl ConnectionReleaseStormAnalyzer {
     pub fn new() -> Self {
         ConnectionReleaseStormAnalyzer {
             release_timestamps: VecDeque::new(),
-            last_release_timestamp: None,
-            consecutive_release_count: 0,
             last_high_alert_timestamp: None,
             medium_alert_fired: false,
         }
@@ -66,7 +60,7 @@ impl ConnectionReleaseStormAnalyzer {
     }
 
     /// Update the time window and check for rate thresholds.
-    /// Returns Some(high_alert_info) if HIGH alert should fire (>2 consecutive within 10s gap),
+    /// Returns Some(high_alert_info) if HIGH alert should fire (>2 within a 10s window),
     /// or Some(medium_alert_info) if MEDIUM alert should fire (>3 in 300s).
     fn check_thresholds(
         &mut self,
@@ -85,32 +79,23 @@ impl ConnectionReleaseStormAnalyzer {
         // Add current timestamp
         self.release_timestamps.push_back(timestamp);
 
-        // Check HIGH alert condition: >2 consecutive releases within 10s gaps
-        // If current release is within 10s of the last release, increment consecutive count
-        if let Some(last_ts) = self.last_release_timestamp {
-            let gap = timestamp.signed_duration_since(last_ts);
-            if gap <= Duration::seconds(10) {
-                // Still in the same burst
-                self.consecutive_release_count += 1;
-            } else {
-                // New burst, reset count
-                self.consecutive_release_count = 1;
-            }
-        } else {
-            // First release
-            self.consecutive_release_count = 1;
-        }
-        self.last_release_timestamp = Some(timestamp);
+        // Check HIGH alert condition: >2 releases within the trailing 10 seconds
+        let window_10_start = timestamp - Duration::seconds(10);
+        let recent_count = self
+            .release_timestamps
+            .iter()
+            .rev()
+            .take_while(|&&ts| ts >= window_10_start)
+            .count();
 
-        // Fire HIGH alert if consecutive count > 2
-        if self.consecutive_release_count > 2 {
+        if recent_count > 2 {
             // Fire HIGH alert if enough time has passed since last HIGH alert
             if self.last_high_alert_timestamp.is_none()
                 || timestamp.signed_duration_since(self.last_high_alert_timestamp.unwrap())
                     >= Duration::seconds(10)
             {
                 self.last_high_alert_timestamp = Some(timestamp);
-                return Some((EventType::High, self.consecutive_release_count, 10));
+                return Some((EventType::High, recent_count, 10));
             }
         }
 
@@ -137,7 +122,7 @@ impl Analyzer for ConnectionReleaseStormAnalyzer {
                 severity if >3 releases occur within a 300-second window. Normal behavior involves at most \
                 1 release per session end."
                 .into(),
-            version: 1,
+            version: 2,
         }
     }
 
@@ -277,6 +262,34 @@ mod tests {
                 assert!(ev.is_none());
             }
         }
+    }
+
+    #[test]
+    fn spaced_releases_spanning_more_than_10s_do_not_trigger_high() {
+        let mut a = ConnectionReleaseStormAnalyzer::new();
+        // Each gap is under 10s, but the three releases span 18s
+        for (i, secs) in [0i64, 9, 18].into_iter().enumerate() {
+            let ev = a.analyze_information_element(
+                &release_with_other_cause(),
+                i + 1,
+                ts() + Duration::seconds(secs),
+            );
+            assert!(ev.is_none(), "releases at 0/9/18s are not 3 within 10s");
+        }
+    }
+
+    #[test]
+    fn releases_at_window_edge_trigger_high() {
+        let mut a = ConnectionReleaseStormAnalyzer::new();
+        let mut last = None;
+        for (i, secs) in [0i64, 5, 10].into_iter().enumerate() {
+            last = a.analyze_information_element(
+                &release_with_other_cause(),
+                i + 1,
+                ts() + Duration::seconds(secs),
+            );
+        }
+        assert_eq!(last.map(|e| e.event_type), Some(EventType::High));
     }
 
     #[test]

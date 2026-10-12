@@ -7,7 +7,9 @@ use chrono::prelude::*;
 use deku::prelude::*;
 use pcap_file_tokio::pcapng::PcapNgWriter;
 use pcap_file_tokio::pcapng::blocks::enhanced_packet::{EnhancedPacketBlock, EnhancedPacketOption};
-use pcap_file_tokio::pcapng::blocks::interface_description::InterfaceDescriptionBlock;
+use pcap_file_tokio::pcapng::blocks::interface_description::{
+    InterfaceDescriptionBlock, InterfaceDescriptionOption,
+};
 use pcap_file_tokio::pcapng::blocks::section_header::{SectionHeaderBlock, SectionHeaderOption};
 use pcap_file_tokio::{Endianness, PcapError};
 use serde::Serialize;
@@ -25,6 +27,34 @@ pub enum GsmtapPcapError {
     TimestampOutOfRange(#[from] chrono::OutOfRangeError),
     #[error("Deku error: {0}")]
     Deku(#[from] DekuError),
+}
+
+/// Returns the interface's `if_tsresol` option, if present.
+pub fn if_tsresol(interface: &InterfaceDescriptionBlock) -> Option<u8> {
+    interface.options.iter().find_map(|opt| match opt {
+        InterfaceDescriptionOption::IfTsResol(resol) => Some(*resol),
+        _ => None,
+    })
+}
+
+/// Converts an [EnhancedPacketBlock] timestamp as read by pcap_file into the
+/// duration since the Unix epoch. pcap_file returns the raw timestamp ticks as
+/// nanoseconds regardless of the interface's `if_tsresol` (see the workaround
+/// in [GsmtapPcapWriter::write_gsmtap_message]), so scale them here.
+/// `if_tsoffset` is not applied; Rayhunter never writes it.
+pub fn pcapng_timestamp(raw: std::time::Duration, if_tsresol: Option<u8>) -> std::time::Duration {
+    let ticks = raw.as_nanos();
+    // pcapng default resolution is 10^-6 s
+    let resol = if_tsresol.unwrap_or(6);
+    let nanos = if resol & 0x80 != 0 {
+        // MSB set: 2^-n seconds per tick
+        (ticks * 1_000_000_000) >> (resol & 0x7f).min(127)
+    } else if resol <= 9 {
+        ticks * 10u128.pow(9 - resol as u32)
+    } else {
+        ticks / 10u128.pow((resol as u32 - 9).min(38))
+    };
+    std::time::Duration::from_nanos(nanos.try_into().unwrap_or(u64::MAX))
 }
 
 #[derive(Serialize)]

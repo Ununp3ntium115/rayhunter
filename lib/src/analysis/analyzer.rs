@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::DeviceMetadata;
-use crate::diag::diaglog::{GPS_EPOCH, LogBody};
+use crate::diag::diaglog::LogBody;
 use crate::diag::{DiagParsingError, Message, MessagesContainer};
 use crate::gsmtap::{GsmtapHeader, GsmtapMessage, GsmtapType, parser as gsmtap_parser};
 use crate::util::RuntimeMetadata;
@@ -109,6 +109,20 @@ impl Default for AnalyzerConfig {
 }
 
 impl AnalyzerConfig {
+    /// Enables every registered analyzer, including those disabled by default,
+    /// except the deliberately noisy test analyzer.
+    pub fn all_enabled() -> Self {
+        AnalyzerConfig(
+            get_analyzers_metadata()
+                .into_iter()
+                .map(|metadata| {
+                    let enabled = metadata.key != "test_analyzer";
+                    (metadata.key.to_string(), enabled)
+                })
+                .collect(),
+        )
+    }
+
     /// Returns the configured override for `key`, or `None` when there is no
     /// config entry for it.
     fn is_enabled(&self, key: &str) -> Option<bool> {
@@ -519,7 +533,9 @@ impl Harness {
     ) -> AnalysisRow {
         self.packet_num += 1;
 
-        let packet_timestamp = *GPS_EPOCH + packet.timestamp;
+        // pcap timestamps are relative to the Unix epoch; pcapng callers should
+        // normalize them with crate::pcap::pcapng_timestamp first
+        let packet_timestamp = DateTime::UNIX_EPOCH.fixed_offset() + packet.timestamp;
         let mut row = AnalysisRow {
             packet_timestamp: Some(packet_timestamp),
             skipped_message_reason: None,

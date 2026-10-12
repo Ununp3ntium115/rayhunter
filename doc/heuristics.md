@@ -169,7 +169,7 @@ This analyzer triggers on two independent conditions:
 
 **Limitations (v1):** This detector is blind to the sequence context (e.g., whether setups follow explicit RRCConnectionRelease messages with cause="other"). Such sequencing is documented in PCAP analysis but not yet correlated. A future version may correlate release-then-setup cycles for higher specificity.
 
-### Connection Release Storm (v1)
+### Connection Release Storm (v2)
 
 Disabled by default. Enable it with `connection_release_storm = true` under `[analyzers]` in the config file.
 
@@ -181,7 +181,7 @@ Only releases with cause="other" are counted; releases due to load balancing or 
 
 This analyzer triggers on two independent conditions:
 
-**High Severity:** More than 2 RRCConnectionRelease messages with cause="other" within a 10-second time window (i.e., 3+ consecutive rapid releases). After alert fires, the detector prevents immediate re-trigger by requiring a 10-second gap before the next HIGH alert.
+**High Severity:** More than 2 RRCConnectionRelease messages with cause="other" within a trailing 10-second time window. (Version 1 counted consecutive releases whose gaps were each under 10 seconds, so releases at 0, 9 and 18 seconds alerted.) After alert fires, the detector prevents immediate re-trigger by requiring a 10-second gap before the next HIGH alert.
 
 **Medium Severity:** More than 3 RRCConnectionRelease messages with cause="other" within a 300-second time window (i.e., 4+). Fires once per recording to indicate sustained, moderately-paced forced termination activity.
 

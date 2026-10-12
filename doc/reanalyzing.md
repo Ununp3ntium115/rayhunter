@@ -32,6 +32,7 @@ Options:
   -j, --json <JSON>   Output report to a JSON file
   -q, --quiet         Only print warnings/errors to stdout
   -d, --debug         Show debug messages
+      --all-analyzers Enable every analyzer except the test analyzer, including those disabled by default
   -h, --help          Print help
   -V, --version       Print version
 ```
@@ -43,3 +44,5 @@ Options:
 `rayhunter-check -p ~/Downloads #Check all files in downloads`
 
 `rayhunter-check -d -p ~/Downloads/myfile.qmdl #run in debug mode`
+
+`rayhunter-check --all-analyzers -p ~/Downloads/myfile.pcapng #also run the opt-in heuristics`
