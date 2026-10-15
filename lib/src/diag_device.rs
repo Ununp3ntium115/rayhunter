@@ -327,8 +327,16 @@ struct DiagLoggingModeParam {
     mode_param: u8,
 }
 
-// Triggers the diag device's debug logging mode
+// Triggers the diag device's debug logging mode.
+//
+// On the R500L5 (SDX55, kernel 4.14.206-perf) the adpl daemon holds
+// diagchar_mutex so SWITCH_LOGGING returns EINVAL for every mode.  Rather
+// than aborting, we log a warning and let the daemon continue: DIAG data
+// still flows without a mode switch (the kernel delivers it in raw format),
+// and the opt-in /api/diag/stream endpoint can expose it directly.
 fn enable_frame_readwrite(fd: i32, mode: u32, configured_device: &Device) -> DiagResult<()> {
+    const SOCKET_MODE: u32 = 9;
+
     unsafe {
         if libc::ioctl(fd, DIAG_IOCTL_SWITCH_LOGGING, mode, 0, 0, 0) < 0 {
             let mut try_params = vec![DiagLoggingModeParam {
@@ -346,6 +354,15 @@ fn enable_frame_readwrite(fd: i32, mode: u32, configured_device: &Device) -> Dia
                         mode_param: 1,
                     },
                 );
+            }
+            if configured_device == &Device::R500l5 {
+                // R500L5: also try socket mode with MODEM-only peripheral mask
+                // (MHI MDM channel is open; RPMsg MODEM is not)
+                try_params.push(DiagLoggingModeParam {
+                    req_mode: SOCKET_MODE,
+                    peripheral_mask: 1,
+                    mode_param: 0,
+                });
             }
 
             let mut ret = 0;
@@ -369,7 +386,14 @@ fn enable_frame_readwrite(fd: i32, mode: u32, configured_device: &Device) -> Dia
 
             if ret < 0 {
                 let msg = format!("DIAG_IOCTL_SWITCH_LOGGING ioctl failed with error code {ret}");
-                return Err(DiagDeviceError::InitializationFailed(msg));
+                if configured_device == &Device::R500l5 {
+                    // Non-fatal on R500L5: adpl holds diagchar_mutex.
+                    // Raw DIAG data still flows; enable diag_stream_enabled in
+                    // config.toml to expose it at /api/diag/stream.
+                    log::warn!("{msg} — continuing without mode switch (R500L5)");
+                } else {
+                    return Err(DiagDeviceError::InitializationFailed(msg));
+                }
             }
         }
     }

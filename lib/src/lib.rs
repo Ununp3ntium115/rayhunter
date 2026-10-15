@@ -47,6 +47,9 @@ pub enum Device {
     Pinephone,
     Uz801,
     Moxee,
+    /// Orbic Speed 5G UW R500L5 (SDX55, Verizon firmware ORB500L5_V2.0.x)
+    #[serde(rename = "r500l5")]
+    R500l5,
 }
 
 /// Facts about the device rayhunter is running on, gathered at runtime and
