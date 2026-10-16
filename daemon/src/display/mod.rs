@@ -5,6 +5,7 @@ mod generic_framebuffer;
 
 pub mod headless;
 pub mod orbic;
+pub mod r500l5;
 pub mod tmobile;
 pub mod tplink;
 pub mod tplink_framebuffer;

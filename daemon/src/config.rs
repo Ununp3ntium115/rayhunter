@@ -198,7 +198,7 @@ impl Config {
                 Some("/data/misc/wifi/hostapd.conf".into()),
                 Some("/data/misc/wifi/sockets".into()),
             ),
-            Device::Orbic | Device::Moxee => (
+            Device::Orbic | Device::Moxee | Device::R500l5 => (
                 Some("/data/rayhunter/bin/wpa_supplicant".into()),
                 Some("/etc/hostapd.conf".into()),
                 None,
@@ -218,14 +218,14 @@ impl Config {
             dhcp_lease_path: Some("/data/rayhunter/dhcp_lease".into()),
             wpa_conf_path: Some("/data/rayhunter/wpa_sta.conf".into()),
             iw_bin: resolve_bin("iw").or_else(|| {
-                if self.device == Device::Orbic || self.device == Device::Moxee {
+                if matches!(self.device, Device::Orbic | Device::Moxee | Device::R500l5) {
                     Some("/data/rayhunter/bin/iw".into())
                 } else {
                     None
                 }
             }),
             udhcpc_bin: resolve_bin("udhcpc").or_else(|| {
-                if self.device == Device::Orbic || self.device == Device::Moxee {
+                if matches!(self.device, Device::Orbic | Device::Moxee | Device::R500l5) {
                     Some("/data/rayhunter/bin/udhcpc".into())
                 } else {
                     None

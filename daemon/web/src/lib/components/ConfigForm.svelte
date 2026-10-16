@@ -252,10 +252,11 @@
                         label="Colorblind Mode"
                         bind:checked={config.colorblind_mode}
                     />
-                    {#if config.device === 'orbic'}
+                    {#if config.device === 'orbic' || config.device === 'r500l5'}
                         <CheckboxField
                             id="keep_screen_on"
-                            label="Keep Screen On (Orbic only)"
+                            label="Keep Screen On"
+                            help={config.device === 'r500l5' ? 'Experimental on R500L5 — requires hardware verification of sysfs paths' : undefined}
                             bind:checked={config.keep_screen_on}
                         />
                     {/if}
@@ -512,7 +513,7 @@
                     </ExpandableInput>
                 </div>
 
-                {#if config.device === 'orbic' || config.device === 'moxee' || config.device === 'tmobile' || config.device === 'wingtech'}
+                {#if config.device === 'orbic' || config.device === 'moxee' || config.device === 'tmobile' || config.device === 'wingtech' || config.device === 'r500l5'}
                     <div class="border-t border-gray-200 pt-4 mt-6 space-y-3">
                         <h3 class="text-lg font-semibold text-gray-800 mb-4">WiFi Client Mode</h3>
                         <p class="text-xs text-gray-500">
