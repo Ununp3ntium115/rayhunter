@@ -116,6 +116,11 @@ pub struct Config {
     /// while Rayhunter keeps running. Off by default: the stream contains unfiltered baseband
     /// traffic, including subscriber identifiers.
     pub diag_stream_enabled: bool,
+    /// Enable ethernet WAN uplink mode: removes the ethernet interface from the LAN bridge,
+    /// runs DHCP to get an address from an upstream router, and routes the device's own traffic
+    /// through the wired connection. Useful when WiFi client mode is unavailable or unreliable.
+    /// Has no effect on devices without a wired ethernet port.
+    pub ethernet_uplink_enabled: bool,
 }
 
 /// Configuration for uploading finished QMDL recordings to a WebDAV server.
@@ -181,6 +186,7 @@ impl Default for Config {
             webdav: WebdavConfig::default(),
             keep_screen_on: false,
             diag_stream_enabled: false,
+            ethernet_uplink_enabled: false,
         }
     }
 }
@@ -233,6 +239,18 @@ impl Config {
             }),
             crash_log_dir: Some("/data/rayhunter/crash-logs".into()),
             wakelock_name: Some("rayhunter".into()),
+        }
+    }
+
+    pub fn ethernet_config(&self) -> crate::ethernet_uplink::EthernetUplinkConfig {
+        let udhcpc_bin = resolve_bin("udhcpc")
+            .unwrap_or_else(|| "udhcpc".to_string());
+        crate::ethernet_uplink::EthernetUplinkConfig {
+            iface: "eth0".to_string(),
+            udhcpc_bin,
+            udhcpc_hook_path: "/data/rayhunter/eth_udhcpc.sh".to_string(),
+            dhcp_lease_path: "/data/rayhunter/eth_lease".to_string(),
+            dns_servers: self.dns_servers.clone().unwrap_or_default(),
         }
     }
 }
