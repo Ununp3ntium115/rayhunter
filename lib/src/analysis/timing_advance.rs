@@ -4,6 +4,9 @@ use chrono::{DateTime, FixedOffset};
 
 const MIN_SAMPLES: u32 = 20;
 const SIGMA_THRESHOLD: f64 = 2.5;
+// When all baseline TAs are identical (std_dev=0), flag deviations beyond this
+// many raw TA units (~780m at 78m/unit) rather than silently skipping.
+const ZERO_STD_RAW_THRESHOLD: f64 = 10.0;
 
 pub struct TimingAdvanceAnalyzer {
     count: u32,
@@ -35,7 +38,9 @@ impl TimingAdvanceAnalyzer {
             if std_dev >= 1.0 {
                 (ta - self.mean).abs() > SIGMA_THRESHOLD * std_dev
             } else {
-                false
+                // All baseline TAs are nearly identical; std_dev scaling would suppress
+                // detection entirely, so use a raw unit threshold instead.
+                (ta - self.mean).abs() > ZERO_STD_RAW_THRESHOLD
             }
         } else {
             false
@@ -56,7 +61,7 @@ impl Analyzer for TimingAdvanceAnalyzer {
     fn metadata() -> AnalyzerMetadata {
         AnalyzerMetadata {
             key: "timing_advance_outlier".into(),
-            default_enabled: false,
+            default_enabled: true,
             name: "Timing Advance Outlier".into(),
             description: "Flags LTE Timing Advance values that are statistical outliers \
                 (>2.5σ from the session mean). An unusually small TA can indicate a \

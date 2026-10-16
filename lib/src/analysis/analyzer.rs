@@ -40,7 +40,7 @@ fn all_analyzers(
         ),
         (
             ConnectionRedirect2GDowngradeAnalyzer::metadata(),
-            boxed(ConnectionRedirect2GDowngradeAnalyzer {}),
+            boxed(ConnectionRedirect2GDowngradeAnalyzer::new()),
         ),
         (
             LteSib6And7DowngradeAnalyzer::metadata(),

@@ -7,6 +7,8 @@ use telcom_parser::lte_rrc::PCCH_MessageType;
 pub struct PagingStormAnalyzer {
     /// Time-windowed queue of paging message timestamps (60-second window)
     paging_timestamps: VecDeque<DateTime<FixedOffset>>,
+    /// Total paging messages seen (never cleared, used for ratio calculation)
+    total_paging_count: usize,
     /// Flag to ensure ratio alert fires only once per recording
     ratio_alert_fired: bool,
 }
@@ -21,6 +23,7 @@ impl PagingStormAnalyzer {
     pub fn new() -> Self {
         PagingStormAnalyzer {
             paging_timestamps: VecDeque::new(),
+            total_paging_count: 0,
             ratio_alert_fired: false,
         }
     }
@@ -73,7 +76,7 @@ impl Analyzer for PagingStormAnalyzer {
     fn metadata() -> AnalyzerMetadata {
         AnalyzerMetadata {
             key: "paging_storm".into(),
-            default_enabled: false,
+            default_enabled: true,
             name: "Paging Message Storm".into(),
             description: "Detects excessive LTE paging messages that may indicate an IMSI catcher. \
                 Fires HIGH severity if >50 paging messages occur within 60 seconds, or MEDIUM severity \
@@ -93,6 +96,8 @@ impl Analyzer for PagingStormAnalyzer {
             return None;
         }
 
+        self.total_paging_count += 1;
+
         // Check time-window threshold (HIGH severity)
         let window_count = self.paging_timestamps.len() + 1;
         if self.check_time_window_threshold(timestamp) {
@@ -107,9 +112,11 @@ impl Analyzer for PagingStormAnalyzer {
         }
 
         // Check ratio threshold (MEDIUM severity, once per recording)
-        // Require minimum warmup to avoid false positives at recording start
+        // Require minimum warmup to avoid false positives at recording start.
+        // Use total_paging_count (not paging_timestamps.len()) so the ratio stays
+        // accurate even after check_time_window_threshold clears the window on HIGH.
         if !self.ratio_alert_fired && packet_num >= 20 {
-            let paging_ratio = self.paging_timestamps.len() as f64 / packet_num as f64;
+            let paging_ratio = self.total_paging_count as f64 / packet_num as f64;
             if paging_ratio > 0.3 {
                 self.ratio_alert_fired = true;
                 return Some(Event {

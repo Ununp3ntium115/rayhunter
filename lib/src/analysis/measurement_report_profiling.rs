@@ -107,7 +107,7 @@ impl Analyzer for MeasurementReportProfilingAnalyzer {
     fn metadata() -> AnalyzerMetadata {
         AnalyzerMetadata {
             key: "measurement_report_profiling_detector".into(),
-            default_enabled: false,
+            default_enabled: true,
             name: "Measurement Report Profiling".into(),
             description: "Detects aggressive measurement report patterns indicating signal strength profiling \
                 attacks. A fake cell may request frequent measurement reports to build UE location profiles and \

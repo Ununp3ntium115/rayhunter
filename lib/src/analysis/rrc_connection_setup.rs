@@ -5,8 +5,10 @@ use std::collections::VecDeque;
 use telcom_parser::lte_rrc::DL_CCCH_MessageType;
 
 pub struct RapidConnectionSetupAnalyzer {
-    /// Time-windowed queue of RRCConnectionSetup message timestamps (300-second window)
-    setup_timestamps: VecDeque<DateTime<FixedOffset>>,
+    /// Timestamps within the 60-second burst window
+    burst_timestamps: VecDeque<DateTime<FixedOffset>>,
+    /// Timestamps within the 300-second sustained window
+    sustained_timestamps: VecDeque<DateTime<FixedOffset>>,
     /// Total count of RRCConnectionSetup messages seen
     total_setups: usize,
     /// Flag to ensure ratio alert fires only once per recording
@@ -22,7 +24,8 @@ impl Default for RapidConnectionSetupAnalyzer {
 impl RapidConnectionSetupAnalyzer {
     pub fn new() -> Self {
         RapidConnectionSetupAnalyzer {
-            setup_timestamps: VecDeque::new(),
+            burst_timestamps: VecDeque::new(),
+            sustained_timestamps: VecDeque::new(),
             total_setups: 0,
             ratio_alert_fired: false,
         }
@@ -49,29 +52,35 @@ impl RapidConnectionSetupAnalyzer {
         }
     }
 
-    /// Update the time window and check for rate threshold.
-    /// Returns the count of setups in the window if alert should fire (count > 2 in 300s).
-    /// Clears the window after firing to prevent immediate re-alert.
+    /// Check both time windows and return the highest-severity alert, if any.
+    /// Burst window (60s, ≥3): HIGH — truly rapid forced re-establishment.
+    /// Sustained window (300s, ≥5): HIGH — repeated re-establishment over 5 minutes.
+    /// Clears the triggering window after firing to prevent immediate re-alert.
     fn check_time_window_threshold(&mut self, timestamp: DateTime<FixedOffset>) -> Option<usize> {
-        // Remove timestamps older than 300 seconds
-        let window_start = timestamp - Duration::seconds(300);
-        while let Some(&front) = self.setup_timestamps.front() {
-            if front < window_start {
-                self.setup_timestamps.pop_front();
-            } else {
-                break;
-            }
+        // Burst window: 3+ setups in 60 seconds
+        let burst_start = timestamp - Duration::seconds(60);
+        while self.burst_timestamps.front().is_some_and(|&t| t < burst_start) {
+            self.burst_timestamps.pop_front();
         }
-
-        // Add current timestamp
-        self.setup_timestamps.push_back(timestamp);
-
-        // Fire alert if count > 2, then clear window to prevent immediate re-alert
-        if self.setup_timestamps.len() > 2 {
-            let count = self.setup_timestamps.len();
-            self.setup_timestamps.clear();
+        self.burst_timestamps.push_back(timestamp);
+        if self.burst_timestamps.len() >= 3 {
+            let count = self.burst_timestamps.len();
+            self.burst_timestamps.clear();
             return Some(count);
         }
+
+        // Sustained window: 5+ setups in 300 seconds
+        let sustained_start = timestamp - Duration::seconds(300);
+        while self.sustained_timestamps.front().is_some_and(|&t| t < sustained_start) {
+            self.sustained_timestamps.pop_front();
+        }
+        self.sustained_timestamps.push_back(timestamp);
+        if self.sustained_timestamps.len() >= 5 {
+            let count = self.sustained_timestamps.len();
+            self.sustained_timestamps.clear();
+            return Some(count);
+        }
+
         None
     }
 }
@@ -80,16 +89,16 @@ impl Analyzer for RapidConnectionSetupAnalyzer {
     fn metadata() -> AnalyzerMetadata {
         AnalyzerMetadata {
             key: "rapid_connection_setup".into(),
-            default_enabled: false,
+            default_enabled: true,
             name: "Rapid RRC Connection Setup".into(),
             description: "Detects multiple RRC connection setup messages within short time windows, which may indicate \
                 forced connection re-establishment attacks or IMSI catcher activity. IMSI catchers may trigger rapid setups \
-                to enable multiple security procedures and facilitate cipher algorithm downgrade. Fires HIGH severity if >2 setup \
-                messages occur within 300 seconds, or MEDIUM severity if setups comprise >3% of total traffic. Normal behavior \
-                involves 1 setup per connection session. False positives may occur during rapid idle/connected state cycling \
-                on unstable networks."
+                to enable multiple security procedures and facilitate cipher algorithm downgrade. Fires HIGH severity if ≥3 setup \
+                messages occur within 60 seconds (burst), or if ≥5 occur within 300 seconds (sustained). Fires MEDIUM severity \
+                if setups comprise >3% of total traffic. Normal LTE behavior on carriers like Verizon involves 2–4 setups \
+                per 5-minute window; only genuinely elevated rates are flagged."
                 .into(),
-            version: 1,
+            version: 2,
         }
     }
 
@@ -199,36 +208,56 @@ mod tests {
     }
 
     #[test]
-    fn time_window_below_threshold() {
+    fn burst_window_below_threshold() {
         let mut a = RapidConnectionSetupAnalyzer::new();
-        // Add 2 setups spread over 400 packets to keep ratio below 3%
+        // 2 setups within 60s — below burst threshold of 3
         for i in 0i64..2 {
-            let ts = ts() + Duration::seconds(i * 100);
-            let pkt_num = (i * 200) as usize + 1;
-            let ev = a.analyze_information_element(&connection_setup_ie(), pkt_num, ts);
-            assert!(
-                ev.is_none(),
-                "should not alert on 2 messages in time window"
-            );
+            let ts = ts() + Duration::seconds(i * 10);
+            let ev = a.analyze_information_element(&connection_setup_ie(), (i + 1) as usize, ts);
+            assert!(ev.is_none(), "2 setups in 60s should not alert");
         }
     }
 
     #[test]
-    fn time_window_exceeds_threshold() {
+    fn burst_window_exceeds_threshold() {
         let mut a = RapidConnectionSetupAnalyzer::new();
-        // Add 3 setups spread over 600 packets (0.5% ratio)
+        // 3 setups within 60s — triggers burst High
         for i in 0i64..3 {
-            let ts = ts() + Duration::seconds(i);
-            let pkt_num = (i * 200) as usize + 1;
-            let ev = a.analyze_information_element(&connection_setup_ie(), pkt_num, ts);
+            let ts = ts() + Duration::seconds(i * 10);
+            let ev = a.analyze_information_element(&connection_setup_ie(), (i + 1) as usize, ts);
             if i == 2 {
-                assert!(ev.is_some(), "3rd message should trigger time-window alert");
-                let event = ev.unwrap();
-                assert_eq!(event.event_type, EventType::High);
-                assert!(event.message.contains("Rapid RRC connection setup"));
+                assert!(ev.is_some(), "3rd setup in 60s should trigger HIGH");
+                assert_eq!(ev.unwrap().event_type, EventType::High);
             } else {
                 assert!(ev.is_none());
             }
+        }
+    }
+
+    #[test]
+    fn sustained_window_exceeds_threshold() {
+        let mut a = RapidConnectionSetupAnalyzer::new();
+        // 5 setups spaced 70s apart — within 300s sustained window, outside 60s burst window
+        for i in 0i64..5 {
+            let ts = ts() + Duration::seconds(i * 70);
+            let ev = a.analyze_information_element(&connection_setup_ie(), (i + 1) as usize, ts);
+            if i == 4 {
+                assert!(ev.is_some(), "5th setup in 300s should trigger HIGH");
+                assert_eq!(ev.unwrap().event_type, EventType::High);
+            } else {
+                assert!(ev.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn sustained_window_below_threshold() {
+        let mut a = RapidConnectionSetupAnalyzer::new();
+        // 4 setups spaced 70s apart — 4 in 300s is below the sustained threshold of 5
+        for i in 0i64..4 {
+            let ts = ts() + Duration::seconds(i * 70);
+            let ev = a.analyze_information_element(&connection_setup_ie(), (i + 1) as usize, ts);
+            assert!(ev.is_none(), "4 setups in 300s should not alert");
         }
     }
 
@@ -237,21 +266,21 @@ mod tests {
         let mut a = RapidConnectionSetupAnalyzer::new();
         let base_ts = ts();
 
-        // Add 3 messages over 350 seconds (outside the 300-second window)
-        for i in 0i64..3 {
-            let ts = base_ts + Duration::seconds(i * 120);
-            a.analyze_information_element(&connection_setup_ie(), (i + 1) as usize, ts);
+        // 2 setups far apart (>300s), followed by new ones — old ones age out
+        for i in 0i64..2 {
+            a.analyze_information_element(
+                &connection_setup_ie(),
+                (i + 1) as usize,
+                base_ts + Duration::seconds(i * 150),
+            );
         }
-
-        // Verify the first two aged out
-        // Messages at 0s, 120s, 240s — at 240s window is [120s, 240s] (2 old entries)
-        // At 240s +301s = 541s, window is [241s, 541s] — all previous aged out
+        // 301s after start: the first setup (at 0s) has aged out of both windows
         let ev = a.analyze_information_element(
             &connection_setup_ie(),
-            4,
-            base_ts + Duration::seconds(541),
+            3,
+            base_ts + Duration::seconds(400),
         );
-        assert!(ev.is_none(), "window should have dropped old messages");
+        assert!(ev.is_none(), "aged-out messages should not count");
     }
 
     #[test]
@@ -316,53 +345,25 @@ mod tests {
     }
 
     #[test]
-    fn high_alert_fires_on_threshold() {
+    fn burst_alert_clears_window() {
         let mut a = RapidConnectionSetupAnalyzer::new();
         let base_ts = ts();
 
-        // Add 3 setups spread over 600 packets (0.5% ratio to avoid ratio alert)
+        // Trigger burst alert with 3 in 60s
         for i in 0i64..3 {
-            let ts = base_ts + Duration::seconds(i);
-            let pkt_num = (i * 200) as usize + 1;
-            let ev = a.analyze_information_element(&connection_setup_ie(), pkt_num, ts);
-
-            if i == 2 {
-                assert!(ev.is_some(), "3rd setup message triggers HIGH alert");
-                let event = ev.unwrap();
-                assert_eq!(event.event_type, EventType::High);
-                assert!(event.message.contains("Rapid RRC connection"));
-            } else {
-                assert!(ev.is_none());
-            }
+            a.analyze_information_element(
+                &connection_setup_ie(),
+                (i + 1) as usize,
+                base_ts + Duration::seconds(i * 5),
+            );
         }
-    }
-
-    #[test]
-    fn time_window_alert_clears_window() {
-        let mut a = RapidConnectionSetupAnalyzer::new();
-        let base_ts = ts();
-
-        // Add 3 setups to trigger first alert
-        for i in 0i64..3 {
-            let ts = base_ts + Duration::seconds(i);
-            let pkt_num = (i * 200) as usize + 1;
-            let ev = a.analyze_information_element(&connection_setup_ie(), pkt_num, ts);
-            if i == 2 {
-                assert!(ev.is_some());
-            }
-        }
-
-        // Add one more setup shortly after
-        // If window was cleared, this should be alone in the window (no alert)
+        // One more immediately after: window was cleared, so only 1 in window — no alert
         let ev = a.analyze_information_element(
             &connection_setup_ie(),
-            601,
-            base_ts + Duration::seconds(3),
+            4,
+            base_ts + Duration::seconds(16),
         );
-        assert!(
-            ev.is_none(),
-            "new window should not trigger alert with single message"
-        );
+        assert!(ev.is_none(), "burst window cleared — single message should not re-alert");
     }
 
     #[test]
