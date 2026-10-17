@@ -7,7 +7,7 @@ use crate::{Device, log_codes};
 
 use deku::prelude::*;
 use futures::TryStream;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use std::io::ErrorKind;
 use std::os::fd::AsRawFd;
 use std::time::Duration;
@@ -183,6 +183,13 @@ impl DiagDevice {
                 .read(&mut self.read_buf)
                 .await
                 .map_err(DiagDeviceError::DeviceReadFailed)?;
+            if bytes_read <= 8 {
+                // Yield after a short read so tokio timers (and tokio::time::timeout
+                // in config_logs) can fire.  On current_thread runtimes a blocking
+                // spawn_blocking call that returns instantly never gives Poll::Pending,
+                // starving the scheduler; an explicit yield fixes that.
+                tokio::task::yield_now().await;
+            }
         }
 
         if let Some(tap) = &self.raw_tap
@@ -235,6 +242,11 @@ impl DiagDevice {
         loop {
             let container = self.get_next_messages_container().await?;
             if container.data_type != DataType::UserSpace {
+                // Yield to the scheduler so that tokio::time::timeout (used in
+                // config_logs) can fire even when /dev/diag delivers packets in
+                // rapid-fire mode — without a yield point, spawn_blocking
+                // completes synchronously and the sleep future is never polled.
+                tokio::task::yield_now().await;
                 continue;
             }
             return Ok(container.messages());
@@ -298,7 +310,22 @@ impl DiagDevice {
 
     pub async fn config_logs(&mut self) -> DiagResult<()> {
         info!("retrieving diag logging capabilities...");
-        let log_mask_sizes = self.retrieve_id_ranges().await?;
+        // Some devices (e.g. R500L5 after SWITCH_LOGGING fails) never respond to
+        // RetrieveIdRanges, causing read_response() to loop forever.  Time out after
+        // 5 seconds and skip log-mask setup; DIAG data still flows in raw form.
+        let id_ranges = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.retrieve_id_ranges(),
+        )
+        .await;
+        let log_mask_sizes = match id_ranges {
+            Ok(Ok(sizes)) => sizes,
+            Ok(Err(e)) => return Err(e),
+            Err(_timeout) => {
+                warn!("DIAG log capability query timed out — skipping log mask setup");
+                return Ok(());
+            }
+        };
 
         for (log_type, &log_mask_bitsize) in log_mask_sizes.iter().enumerate() {
             if log_mask_bitsize > 0 {
