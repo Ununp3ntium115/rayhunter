@@ -310,20 +310,72 @@ impl DiagDevice {
 
     pub async fn config_logs(&mut self) -> DiagResult<()> {
         info!("retrieving diag logging capabilities...");
-        // Some devices (e.g. R500L5 after SWITCH_LOGGING fails) never respond to
-        // RetrieveIdRanges, causing read_response() to loop forever.  Time out after
-        // 5 seconds and skip log-mask setup; DIAG data still flows in raw form.
-        let id_ranges = tokio::time::timeout(
-            Duration::from_secs(5),
-            self.retrieve_id_ranges(),
-        )
-        .await;
-        let log_mask_sizes = match id_ranges {
-            Ok(Ok(sizes)) => sizes,
-            Ok(Err(e)) => return Err(e),
-            Err(_timeout) => {
-                warn!("DIAG log capability query timed out — skipping log mask setup");
+
+        // Send the RetrieveIdRanges request.
+        let req = Request::LogConfig(LogConfigRequest::RetrieveIdRanges);
+        if let Err(e) = self.write_request(&req).await {
+            warn!("DIAG write_request failed: {e} — skipping log mask setup");
+            return Ok(());
+        }
+
+        // Wait for a response using OS-level poll(2) with a hard 5-second timeout.
+        // tokio::time::timeout does not fire reliably on this device+kernel when
+        // spawn_blocking holds a /dev/diag read: the tokio time driver never gets
+        // scheduled through the event loop.  libc::poll() is driven directly by the
+        // kernel, so it always expires regardless of tokio's state.
+        let fd = self.file.as_raw_fd();
+        let data_ready = tokio::task::spawn_blocking(move || {
+            let mut pfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: pfd stack-allocated; fd is a valid /dev/diag fd for the
+            // duration of this blocking closure (the DiagDevice lives longer).
+            let ret = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, 5000) };
+            ret > 0 && (pfd.revents & libc::POLLIN) != 0
+        })
+        .await
+        .unwrap_or(false);
+
+        if !data_ready {
+            warn!("DIAG log capability query timed out — skipping log mask setup");
+            return Ok(());
+        }
+
+        // poll(2) confirmed POLLIN; read the response (should be fast).
+        let log_mask_sizes = match self.read_response().await {
+            Err(e) => {
+                warn!("DIAG log capability read failed: {e} — skipping log mask setup");
                 return Ok(());
+            }
+            Ok(msgs) => {
+                let mut found: Option<[u32; 16]> = None;
+                for msg in msgs {
+                    match msg {
+                        Ok(Message::Log { .. }) => {}
+                        Ok(Message::Response { payload, status, .. }) => {
+                            if let ResponsePayload::LogConfig(
+                                LogConfigResponse::RetrieveIdRanges { log_mask_sizes },
+                            ) = payload
+                            {
+                                if status != 0 {
+                                    warn!("DIAG retrieve_id_ranges status {status} — skipping log mask setup");
+                                    return Ok(());
+                                }
+                                found = Some(log_mask_sizes);
+                            }
+                        }
+                        Err(e) => error!("error parsing DIAG message: {e:?}"),
+                    }
+                }
+                match found {
+                    Some(sizes) => sizes,
+                    None => {
+                        warn!("DIAG log capability: no RetrieveIdRanges response — skipping log mask setup");
+                        return Ok(());
+                    }
+                }
             }
         };
 
