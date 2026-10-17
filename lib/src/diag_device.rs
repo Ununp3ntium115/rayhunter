@@ -96,7 +96,9 @@ pub struct DiagDevice {
 
 impl DiagDevice {
     pub async fn new(configured_device: &Device) -> DiagResult<Self> {
-        Self::new_with_retries(Duration::from_secs(30), configured_device).await
+        // R500L5 can hold /dev/diag in EEXIST state for 60+ seconds after a rapid
+        // watchdog double-kill; 90 seconds gives the driver time to reset.
+        Self::new_with_retries(Duration::from_secs(90), configured_device).await
     }
 
     pub async fn new_with_retries(
