@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::DeviceMetadata;
-use crate::diag::diaglog::{GPS_EPOCH, LogBody};
+use crate::diag::diaglog::{GPS_EPOCH, LogBody, ll1};
 use crate::diag::{DiagParsingError, Message, MessagesContainer};
 use crate::gsmtap::{GsmtapHeader, GsmtapMessage, GsmtapType, parser as gsmtap_parser};
 use crate::util::RuntimeMetadata;
@@ -594,7 +594,10 @@ impl Harness {
         // These are not converted to GSMTAP and would otherwise be silently dropped.
         if let Message::Log {
             timestamp,
-            body: LogBody::LteLl1ServingCellTiming { data },
+            body:
+                LogBody::LteLl1ServingCellTiming {
+                    data: ll1::ServingCellFrameTiming::V1(data),
+                },
             ..
         } = &qmdl_message
         {
@@ -902,8 +905,6 @@ mod tests {
     #[test]
     fn test_ll1_timing_advance_intercept_fires_outlier_event() {
         use crate::analysis::timing_advance::TimingAdvanceAnalyzer;
-        use crate::diag::diaglog::ll1;
-
         let mut harness = Harness::new();
         harness.add_analyzer(
             TimingAdvanceAnalyzer::metadata(),
@@ -911,7 +912,6 @@ mod tests {
         );
 
         let stable_data = ll1::ServingCellTiming {
-            version: 0,
             num_records: 0,
             starting_sub_fn: 0,
             starting_system_fn: 0,
@@ -930,7 +930,9 @@ mod tests {
             };
             harness.analyze_qmdl_message(Ok(log_message(
                 i << 16,
-                LogBody::LteLl1ServingCellTiming { data },
+                LogBody::LteLl1ServingCellTiming {
+                    data: ll1::ServingCellFrameTiming::V1(data),
+                },
             )));
         }
 
@@ -940,7 +942,9 @@ mod tests {
         };
         let row = harness.analyze_qmdl_message(Ok(log_message(
             50 << 16,
-            LogBody::LteLl1ServingCellTiming { data: outlier_data },
+            LogBody::LteLl1ServingCellTiming {
+                data: ll1::ServingCellFrameTiming::V1(outlier_data),
+            },
         )));
         assert!(!row.events.is_empty(), "expected outlier event");
         let event = &row.events[0];
