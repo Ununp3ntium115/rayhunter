@@ -66,8 +66,11 @@ pub const LOG_CODES_FOR_RAW_PACKET_LOGGING: [u32; 17] = [
     0xb114, // maybe timing advance related?
 ];
 
-// On the R500L5's modem 0xb114 is not the LL1 serving cell timing record we parse: its records are
-// far larger and fail parsing, which would flood the analysis report with skipped rows.
+// 0xb114 is the LL1 serving cell frame timing log. The SDX55 emits version 0xa1: a 16 byte header
+// plus 48 byte per-subframe records (frame/subframe number and three signed timing adjustments),
+// not the version 1 layout we parse, and it carries no timing advance. It is also about 80% of
+// all DIAG traffic, so leaving it out of the mask saves most of the recording space and avoids
+// flooding the analysis report with skipped rows.
 const R500L5_UNSUPPORTED_LOG_CODES: [u32; 1] = [0xb114];
 
 fn log_codes_for_device(configured_device: &Device) -> Vec<u32> {
