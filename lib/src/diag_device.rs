@@ -7,7 +7,7 @@ use crate::{Device, log_codes};
 
 use deku::prelude::*;
 use futures::TryStream;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::io::ErrorKind;
 use std::os::fd::AsRawFd;
 use std::time::Duration;
@@ -66,6 +66,19 @@ pub const LOG_CODES_FOR_RAW_PACKET_LOGGING: [u32; 17] = [
     0xb114, // maybe timing advance related?
 ];
 
+// On the R500L5's modem 0xb114 is not the LL1 serving cell timing record we parse: its records are
+// far larger and fail parsing, which would flood the analysis report with skipped rows.
+const R500L5_UNSUPPORTED_LOG_CODES: [u32; 1] = [0xb114];
+
+fn log_codes_for_device(configured_device: &Device) -> Vec<u32> {
+    LOG_CODES_FOR_RAW_PACKET_LOGGING
+        .into_iter()
+        .filter(|code| {
+            !(configured_device == &Device::R500l5 && R500L5_UNSUPPORTED_LOG_CODES.contains(code))
+        })
+        .collect()
+}
+
 const BUFFER_LEN: usize = 1024 * 1024 * 10;
 const MEMORY_DEVICE_MODE: u32 = 2;
 
@@ -91,6 +104,7 @@ pub struct DiagDevice {
     file: File,
     read_buf: Vec<u8>,
     use_mdm: i32,
+    log_codes: Vec<u32>,
     raw_tap: Option<tokio::sync::broadcast::Sender<bytes::Bytes>>,
 }
 
@@ -151,12 +165,20 @@ impl DiagDevice {
         let fd = diag_file.as_raw_fd();
 
         enable_frame_readwrite(fd, MEMORY_DEVICE_MODE, configured_device)?;
-        let use_mdm = determine_use_mdm(fd)?;
+        // The R500L5 reports a remote (MDM bridge) device here, but every request carrying the
+        // remote-device field is rejected with EIO. Its requests must go to the local modem
+        // without that field, which is what use_mdm == 0 produces.
+        let use_mdm = if configured_device == &Device::R500l5 {
+            0
+        } else {
+            determine_use_mdm(fd)?
+        };
 
         Ok(DiagDevice {
             read_buf: vec![0; BUFFER_LEN],
             file: diag_file,
             use_mdm,
+            log_codes: log_codes_for_device(configured_device),
             raw_tap: None,
         })
     }
@@ -259,6 +281,32 @@ impl DiagDevice {
         let req = Request::LogConfig(LogConfigRequest::RetrieveIdRanges);
         self.write_request(&req).await?;
 
+        // Wait for a response using OS-level poll(2) with a hard 5-second timeout.
+        // tokio::time::timeout does not fire reliably on the R500L5 when spawn_blocking
+        // holds a /dev/diag read: the tokio time driver never gets scheduled through the
+        // event loop.  libc::poll() is driven directly by the kernel, so it always expires
+        // regardless of tokio's state.
+        let fd = self.file.as_raw_fd();
+        let data_ready = tokio::task::spawn_blocking(move || {
+            let mut pfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: pfd stack-allocated; fd is a valid /dev/diag fd for the
+            // duration of this blocking closure (the DiagDevice lives longer).
+            let ret = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, 5000) };
+            ret > 0 && (pfd.revents & libc::POLLIN) != 0
+        })
+        .await
+        .unwrap_or_else(|e| {
+            error!("DIAG poll task failed: {e}");
+            false
+        });
+        if !data_ready {
+            return Err(DiagDeviceError::NoResponse(req));
+        }
+
         for msg in self.read_response().await? {
             match msg {
                 Ok(Message::Log { .. }) => info!("skipping log response..."),
@@ -283,11 +331,7 @@ impl DiagDevice {
     }
 
     async fn set_log_mask(&mut self, log_type: u32, log_mask_bitsize: u32) -> DiagResult<()> {
-        let req = build_log_mask_request(
-            log_type,
-            log_mask_bitsize,
-            &LOG_CODES_FOR_RAW_PACKET_LOGGING,
-        );
+        let req = build_log_mask_request(log_type, log_mask_bitsize, &self.log_codes);
         self.write_request(&req).await?;
 
         for msg in self.read_response().await? {
@@ -312,74 +356,7 @@ impl DiagDevice {
 
     pub async fn config_logs(&mut self) -> DiagResult<()> {
         info!("retrieving diag logging capabilities...");
-
-        // Send the RetrieveIdRanges request.
-        let req = Request::LogConfig(LogConfigRequest::RetrieveIdRanges);
-        if let Err(e) = self.write_request(&req).await {
-            warn!("DIAG write_request failed: {e} — skipping log mask setup");
-            return Ok(());
-        }
-
-        // Wait for a response using OS-level poll(2) with a hard 5-second timeout.
-        // tokio::time::timeout does not fire reliably on this device+kernel when
-        // spawn_blocking holds a /dev/diag read: the tokio time driver never gets
-        // scheduled through the event loop.  libc::poll() is driven directly by the
-        // kernel, so it always expires regardless of tokio's state.
-        let fd = self.file.as_raw_fd();
-        let data_ready = tokio::task::spawn_blocking(move || {
-            let mut pfd = libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: pfd stack-allocated; fd is a valid /dev/diag fd for the
-            // duration of this blocking closure (the DiagDevice lives longer).
-            let ret = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, 5000) };
-            ret > 0 && (pfd.revents & libc::POLLIN) != 0
-        })
-        .await
-        .unwrap_or(false);
-
-        if !data_ready {
-            warn!("DIAG log capability query timed out — skipping log mask setup");
-            return Ok(());
-        }
-
-        // poll(2) confirmed POLLIN; read the response (should be fast).
-        let log_mask_sizes = match self.read_response().await {
-            Err(e) => {
-                warn!("DIAG log capability read failed: {e} — skipping log mask setup");
-                return Ok(());
-            }
-            Ok(msgs) => {
-                let mut found: Option<[u32; 16]> = None;
-                for msg in msgs {
-                    match msg {
-                        Ok(Message::Log { .. }) => {}
-                        Ok(Message::Response { payload, status, .. }) => {
-                            if let ResponsePayload::LogConfig(
-                                LogConfigResponse::RetrieveIdRanges { log_mask_sizes },
-                            ) = payload
-                            {
-                                if status != 0 {
-                                    warn!("DIAG retrieve_id_ranges status {status} — skipping log mask setup");
-                                    return Ok(());
-                                }
-                                found = Some(log_mask_sizes);
-                            }
-                        }
-                        Err(e) => error!("error parsing DIAG message: {e:?}"),
-                    }
-                }
-                match found {
-                    Some(sizes) => sizes,
-                    None => {
-                        warn!("DIAG log capability: no RetrieveIdRanges response — skipping log mask setup");
-                        return Ok(());
-                    }
-                }
-            }
-        };
+        let log_mask_sizes = self.retrieve_id_ranges().await?;
 
         for (log_type, &log_mask_bitsize) in log_mask_sizes.iter().enumerate() {
             if log_mask_bitsize > 0 {
@@ -408,18 +385,61 @@ struct DiagLoggingModeParam {
     mode_param: u8,
 }
 
+// Full `diag_logging_mode_param_t` as the R500L5's kernel (SDX55, 4.14.206-perf) reads it. The
+// kernel copies this whole 24-byte struct from userspace, so the shorter struct above leaves
+// `device_mask` as stack garbage/zero, and the kernel rejects a zero `device_mask` with EINVAL.
+// Measured on the device: req_mode=2, peripheral_mask=2, device_mask=0 -> EINVAL, device_mask=1 -> 0.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct DiagLoggingModeParamExt {
+    req_mode: u32,
+    peripheral_mask: u32,
+    pd_mask: u32,
+    mode_param: u8,
+    diag_id: u8,
+    pd_val: u8,
+    reserved: u8,
+    peripheral: i32,
+    device_mask: i32,
+}
+
+// Peripheral mask bits are DIAG_CON_* flags: bit 0 is the apps processor, bit 1 the modem (MPSS).
+// The modem is the only peripheral we need logs from; with only the apps bit set the log-config
+// request is never answered.
+const R500L5_MODEM_PERIPHERAL_MASK: u32 = 2;
+// DIAG_MD_LOCAL: memory-device session for the local (non-bridged) modem.
+const R500L5_DIAG_MD_LOCAL: i32 = 1;
+
 // Triggers the diag device's debug logging mode.
 //
-// On the R500L5 (SDX55, kernel 4.14.206-perf) the adpl daemon holds
-// diagchar_mutex so SWITCH_LOGGING returns EINVAL for every mode.  Rather
-// than aborting, we log a warning and let the daemon continue: DIAG data
-// still flows without a mode switch (the kernel delivers it in raw format),
-// and the opt-in /api/diag/stream endpoint can expose it directly.
+// The R500L5 needs the extended parameter struct; without a successful switch /dev/diag stays
+// out of memory-device mode, writes fail with EIO and no log data is ever delivered, so a
+// failure here is fatal on every device.
 fn enable_frame_readwrite(fd: i32, mode: u32, configured_device: &Device) -> DiagResult<()> {
-    const SOCKET_MODE: u32 = 9;
-
     unsafe {
         if libc::ioctl(fd, DIAG_IOCTL_SWITCH_LOGGING, mode, 0, 0, 0) < 0 {
+            if configured_device == &Device::R500l5 {
+                let mut params = DiagLoggingModeParamExt {
+                    req_mode: mode,
+                    peripheral_mask: R500L5_MODEM_PERIPHERAL_MASK,
+                    pd_mask: 0,
+                    mode_param: 0,
+                    diag_id: 0,
+                    pd_val: 0,
+                    reserved: 0,
+                    peripheral: 0,
+                    device_mask: R500L5_DIAG_MD_LOCAL,
+                };
+                if libc::ioctl(
+                    fd,
+                    DIAG_IOCTL_SWITCH_LOGGING,
+                    &mut params as *mut DiagLoggingModeParamExt,
+                ) == 0
+                {
+                    return Ok(());
+                }
+            }
+
             let mut try_params = vec![DiagLoggingModeParam {
                 req_mode: mode,
                 peripheral_mask: u32::MAX,
@@ -436,16 +456,6 @@ fn enable_frame_readwrite(fd: i32, mode: u32, configured_device: &Device) -> Dia
                     },
                 );
             }
-            if configured_device == &Device::R500l5 {
-                // R500L5: also try socket mode with MODEM-only peripheral mask
-                // (MHI MDM channel is open; RPMsg MODEM is not)
-                try_params.push(DiagLoggingModeParam {
-                    req_mode: SOCKET_MODE,
-                    peripheral_mask: 1,
-                    mode_param: 0,
-                });
-            }
-
             let mut ret = 0;
 
             for params in &try_params {
@@ -467,14 +477,7 @@ fn enable_frame_readwrite(fd: i32, mode: u32, configured_device: &Device) -> Dia
 
             if ret < 0 {
                 let msg = format!("DIAG_IOCTL_SWITCH_LOGGING ioctl failed with error code {ret}");
-                if configured_device == &Device::R500l5 {
-                    // Non-fatal on R500L5: adpl holds diagchar_mutex.
-                    // Raw DIAG data still flows; enable diag_stream_enabled in
-                    // config.toml to expose it at /api/diag/stream.
-                    log::warn!("{msg} — continuing without mode switch (R500L5)");
-                } else {
-                    return Err(DiagDeviceError::InitializationFailed(msg));
-                }
+                return Err(DiagDeviceError::InitializationFailed(msg));
             }
         }
     }
@@ -492,4 +495,19 @@ fn determine_use_mdm(fd: i32) -> DiagResult<i32> {
         }
     }
     Ok(use_mdm)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_r500l5_skips_unparseable_log_code() {
+        assert!(!log_codes_for_device(&Device::R500l5).contains(&0xb114));
+        assert!(log_codes_for_device(&Device::Orbic).contains(&0xb114));
+        assert_eq!(
+            log_codes_for_device(&Device::R500l5).len(),
+            LOG_CODES_FOR_RAW_PACKET_LOGGING.len() - 1
+        );
+    }
 }

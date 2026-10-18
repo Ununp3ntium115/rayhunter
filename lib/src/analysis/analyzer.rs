@@ -579,7 +579,7 @@ impl Harness {
         let qmdl_message = match maybe_qmdl_message {
             Ok(msg) => msg,
             Err(err) => {
-                row.skipped_message_reason = Some(format!("{err:?}"));
+                row.skipped_message_reason = Some(err.summary());
                 return row;
             }
         };
