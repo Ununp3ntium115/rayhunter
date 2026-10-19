@@ -1,11 +1,11 @@
 mod analysis;
 mod battery;
-mod ethernet_uplink;
 mod config;
 mod crypto_provider;
 mod diag;
 mod display;
 mod error;
+mod ethernet_uplink;
 mod gps;
 mod http_client;
 mod key_input;

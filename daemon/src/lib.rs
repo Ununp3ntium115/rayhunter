@@ -1,11 +1,11 @@
 pub mod analysis;
 pub mod battery;
-pub mod ethernet_uplink;
 pub mod config;
 pub mod crypto_provider;
 pub mod diag;
 pub mod display;
 pub mod error;
+pub mod ethernet_uplink;
 pub mod gps;
 pub mod http_client;
 pub mod key_input;

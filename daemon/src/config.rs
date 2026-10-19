@@ -242,9 +242,9 @@ impl Config {
         }
     }
 
+    #[allow(dead_code)] // consumed once the ethernet uplink task exists
     pub fn ethernet_config(&self) -> crate::ethernet_uplink::EthernetUplinkConfig {
-        let udhcpc_bin = resolve_bin("udhcpc")
-            .unwrap_or_else(|| "udhcpc".to_string());
+        let udhcpc_bin = resolve_bin("udhcpc").unwrap_or_else(|| "udhcpc".to_string());
         crate::ethernet_uplink::EthernetUplinkConfig {
             iface: "eth0".to_string(),
             udhcpc_bin,

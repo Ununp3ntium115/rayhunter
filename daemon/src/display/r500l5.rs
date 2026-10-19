@@ -54,7 +54,9 @@ fn spawn_keep_screen_on(task_tracker: &TaskTracker, shutdown_token: Cancellation
         // their SDX55 paths are known (probe with `ls /sys/devices/` on device).
         let autosleep_available = tokio::fs::metadata(SYSFS_AUTOSLEEP).await.is_ok();
         if !autosleep_available {
-            warn!("keep_screen_on: /sys/power/autosleep not found on R500L5 — screen-on unimplemented");
+            warn!(
+                "keep_screen_on: /sys/power/autosleep not found on R500L5 — screen-on unimplemented"
+            );
             return;
         }
         if let Err(e) = tokio::fs::write(SYSFS_AUTOSLEEP, b"off").await {

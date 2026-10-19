@@ -50,18 +50,16 @@ impl ConnectionRedirect2GDowngradeAnalyzer {
             _ => return,
         };
         let sib_list = match &sib.critical_extensions {
-            SystemInformationCriticalExtensions::SystemInformation_r8(r8) => {
-                &r8.sib_type_and_info
-            }
+            SystemInformationCriticalExtensions::SystemInformation_r8(r8) => &r8.sib_type_and_info,
             _ => return,
         };
         for entry in &sib_list.0 {
-            if let SystemInformation_r8_IEsSib_TypeAndInfo_Entry::Sib7(sib7) = entry {
-                if let Some(freq_list) = &sib7.carrier_freqs_info_list {
-                    for info in &freq_list.0 {
-                        self.announced_geran_arfcns
-                            .insert(info.carrier_freqs.starting_arfcn.0);
-                    }
+            if let SystemInformation_r8_IEsSib_TypeAndInfo_Entry::Sib7(sib7) = entry
+                && let Some(freq_list) = &sib7.carrier_freqs_info_list
+            {
+                for info in &freq_list.0 {
+                    self.announced_geran_arfcns
+                        .insert(info.carrier_freqs.starting_arfcn.0);
                 }
             }
         }
@@ -146,8 +144,9 @@ mod tests {
     #[test]
     fn non_lte_returns_none() {
         let mut a = ConnectionRedirect2GDowngradeAnalyzer::new();
-        assert!(a
-            .analyze_information_element(&InformationElement::GSM, 0, ts())
-            .is_none());
+        assert!(
+            a.analyze_information_element(&InformationElement::GSM, 0, ts())
+                .is_none()
+        );
     }
 }

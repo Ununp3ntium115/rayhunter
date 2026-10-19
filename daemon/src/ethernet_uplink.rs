@@ -1,3 +1,5 @@
+// Config stub for the R500L5 ethernet uplink; nothing consumes it yet.
+#[allow(dead_code)]
 pub struct EthernetUplinkConfig {
     pub iface: String,
     pub udhcpc_bin: String,

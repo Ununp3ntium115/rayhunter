@@ -59,7 +59,11 @@ impl RapidConnectionSetupAnalyzer {
     fn check_time_window_threshold(&mut self, timestamp: DateTime<FixedOffset>) -> Option<usize> {
         // Burst window: 3+ setups in 60 seconds
         let burst_start = timestamp - Duration::seconds(60);
-        while self.burst_timestamps.front().is_some_and(|&t| t < burst_start) {
+        while self
+            .burst_timestamps
+            .front()
+            .is_some_and(|&t| t < burst_start)
+        {
             self.burst_timestamps.pop_front();
         }
         self.burst_timestamps.push_back(timestamp);
@@ -71,7 +75,11 @@ impl RapidConnectionSetupAnalyzer {
 
         // Sustained window: 5+ setups in 300 seconds
         let sustained_start = timestamp - Duration::seconds(300);
-        while self.sustained_timestamps.front().is_some_and(|&t| t < sustained_start) {
+        while self
+            .sustained_timestamps
+            .front()
+            .is_some_and(|&t| t < sustained_start)
+        {
             self.sustained_timestamps.pop_front();
         }
         self.sustained_timestamps.push_back(timestamp);
@@ -363,7 +371,10 @@ mod tests {
             4,
             base_ts + Duration::seconds(16),
         );
-        assert!(ev.is_none(), "burst window cleared — single message should not re-alert");
+        assert!(
+            ev.is_none(),
+            "burst window cleared — single message should not re-alert"
+        );
     }
 
     #[test]

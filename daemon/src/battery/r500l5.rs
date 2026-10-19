@@ -9,8 +9,7 @@ const USB_PRESENT_FILE: &str = "/sys/class/power_supply/usb/present";
 const DC_PRESENT_FILE: &str = "/sys/class/power_supply/dc/present";
 
 pub async fn get_battery_state() -> Result<BatteryState, RayhunterError> {
-    let level =
-        get_level_from_percentage_file(Path::new(BATTERY_CAPACITY_FILE)).await?;
+    let level = get_level_from_percentage_file(Path::new(BATTERY_CAPACITY_FILE)).await?;
 
     let usb_present = tokio::fs::read_to_string(USB_PRESENT_FILE)
         .await
